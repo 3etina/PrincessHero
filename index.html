@@ -1,0 +1,2117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>PrincessHero - Castle Defender</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #1a1a2e;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: monospace;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    cursor: crosshair;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ============================================================
+// PrincessHero - Castle Defender
+// A single-file HTML5 Canvas game
+// ============================================================
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// -- Constants & Config --
+const BASE_W = 800;
+const BASE_H = 500;
+canvas.width = BASE_W;
+canvas.height = BASE_H;
+
+const CASTLE_WALL_X = 240;
+const DOOR_X = CASTLE_WALL_X;
+const DOOR_Y = 260;
+const DOOR_W = 50;
+const DOOR_H = 100;
+const FIELD_START = CASTLE_WALL_X + 50;
+const PRINCESS_MIN_X = CASTLE_WALL_X + 60;
+const PRINCESS_MAX_X = BASE_W - 40;
+const NET_RADIUS = 100;
+const DANGER_RADIUS = 30;
+const NET_SWING_TIME = 400;
+const NET_COOLDOWN = 300;
+const ENEMY_SPAWN_X = BASE_W + 20;
+
+// -- Colors --
+const C = {
+  castleWall: '#6b6b8d',
+  castleWallDark: '#52527a',
+  castleWallLight: '#8585a6',
+  castleFloor: '#4a4a5e',
+  castleFloorDark: '#3d3d50',
+  door: '#5c3a1e',
+  doorDark: '#4a2e16',
+  doorFrame: '#7a7a9c',
+  sky: '#4a90d9',
+  skyGrad1: '#6ba3e0',
+  skyGrad2: '#3a7bc8',
+  grass: '#4a8c3f',
+  grassDark: '#3d7a34',
+  grassLight: '#5ca04f',
+  path: '#c4a968',
+  pathDark: '#b09850',
+  hudBg: 'rgba(0,0,0,0.6)',
+  hudText: '#ffffff',
+  hudScore: '#ffd700',
+  netColor: '#e8d8b0',
+  netRope: '#c4a968',
+  netGlow: 'rgba(255,215,0,0.3)',
+  titlePink: '#ff6b9d',
+  titleGold: '#ffd700',
+  menuBg: 'rgba(20,20,40,0.92)',
+  btnBg: '#4a3080',
+  btnHover: '#6040a0',
+  btnText: '#ffffff',
+  white: '#ffffff',
+  black: '#000000',
+  red: '#ff4444',
+  healthGreen: '#44cc44',
+  healthYellow: '#cccc44',
+  healthRed: '#cc4444',
+};
+
+// -- Princess Palettes --
+const PRINCESS_DATA = [
+  { name: 'Rose', hair: '#cc3333', hairDark: '#aa2222', dress: '#ff6b9d', dressDark: '#dd4477', skin: '#ffccaa', skinDark: '#eebb99', crown: '#ffd700', eye: '#4466aa' },
+  { name: 'Azure', hair: '#eeeeff', hairDark: '#ccccdd', dress: '#4a90d9', dressDark: '#3070b0', skin: '#ffddbb', skinDark: '#eeccaa', crown: '#c0c0c0', eye: '#336644', braidTie: '#4a90d9' },
+  { name: 'Jade', hair: '#8b5e3c', hairDark: '#6b4e2c', dress: '#4a8c3f', dressDark: '#3a7030', skin: '#eebb99', skinDark: '#ddaa88', crown: '#ffd700', eye: '#5533aa' },
+  { name: 'Violet', hair: '#2a2a3a', hairDark: '#1a1a2a', dress: '#9b59b6', dressDark: '#7b3996', skin: '#ffccbb', skinDark: '#eebbaa', crown: '#e8d8b0', eye: '#cc3333' },
+];
+
+// -- Enemy Config --
+const ENEMY_TYPES = {
+  goblin:  { name: 'Goblin',  color: '#44cc44', colorDark: '#228822', eyeColor: '#ff4444', speed: 1.0, hp: 1, points: 10, w: 20, h: 24 },
+  bandit:  { name: 'Bandit',  color: '#cc8844', colorDark: '#aa6622', eyeColor: '#ffffff', speed: 1.4, hp: 1, points: 20, w: 22, h: 26 },
+  knight:  { name: 'Dark Knight', color: '#666688', colorDark: '#444466', eyeColor: '#ff6666', speed: 0.7, hp: 2, points: 30, w: 26, h: 32 },
+  wizard:  { name: 'Wizard',  color: '#aa44cc', colorDark: '#882299', eyeColor: '#ffff44', speed: 1.6, hp: 1, points: 50, w: 20, h: 30 },
+};
+
+// -- Wave Config (one enemy type per wave, cycles after wave 4) --
+const WAVE_DEFS = [
+  { types: ['goblin'], spawnInterval: 2200, count: 5 },   // Wave 1: Dawn - Goblins
+  { types: ['bandit'], spawnInterval: 2000, count: 5 },   // Wave 2: Midday - Bandits
+  { types: ['knight'], spawnInterval: 2400, count: 4 },   // Wave 3: Sunset - Knights
+  { types: ['wizard'], spawnInterval: 2200, count: 4 },   // Wave 4: Night - Wizards
+  // Waves 5+ cycle back with increased difficulty
+  { types: ['goblin'], spawnInterval: 1800, count: 7 },   // Wave 5: Dawn again
+  { types: ['bandit'], spawnInterval: 1600, count: 7 },   // Wave 6: Midday
+  { types: ['knight'], spawnInterval: 2000, count: 5 },   // Wave 7: Sunset
+  { types: ['wizard'], spawnInterval: 1800, count: 5 },   // Wave 8: Night
+];
+
+// -- Game State --
+let state = 'title'; // title, select, play, gameover, waveAnnounce
+let selectedPrincess = 0;
+let hoverPrincess = -1;
+let score = 0;
+let highScore = parseInt(localStorage.getItem('princessHeroHighScore')) || 0;
+let wave = 0;
+let waveEnemiesSpawned = 0;
+let waveEnemiesTotal = 0;
+let waveTimer = 0;
+let waveAnnounceTimer = 0;
+let enemies = [];
+let particles = [];
+let princess = null;
+let netSwing = null;
+let netCooldownTimer = 0;
+let comboCount = 0;
+let comboTimer = 0;
+let lastTime = 0;
+let dt = 0;
+let mouseX = 0;
+let mouseY = 0;
+let keysDown = {};
+let lives = 3;
+let hoverStart = false;
+let hoverRestart = false;
+let screenShake = 0;
+let scorePopups = [];
+let titleAnimTime = 0;
+let starField = [];
+let castleDecorations = [];
+let gameOverReason = '';
+
+// -- Audio System (Web Audio API) --
+let audioCtx = null;
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+}
+function playSound(freq, duration, type = 'square', volume = 0.15) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration);
+}
+function sfxSwing() {
+  playSound(300, 0.15, 'sawtooth', 0.08);
+  playSound(500, 0.1, 'sine', 0.06);
+}
+function sfxCatch() {
+  playSound(600, 0.1, 'square', 0.1);
+  playSound(800, 0.15, 'sine', 0.08);
+  setTimeout(() => playSound(1000, 0.1, 'sine', 0.06), 50);
+}
+function sfxHit() {
+  playSound(200, 0.1, 'square', 0.08);
+  playSound(150, 0.15, 'sawtooth', 0.06);
+}
+function sfxGameOver() {
+  playSound(400, 0.3, 'square', 0.1);
+  setTimeout(() => playSound(300, 0.3, 'square', 0.1), 200);
+  setTimeout(() => playSound(200, 0.5, 'square', 0.1), 400);
+}
+function sfxWave() {
+  playSound(500, 0.15, 'sine', 0.1);
+  setTimeout(() => playSound(700, 0.15, 'sine', 0.1), 100);
+  setTimeout(() => playSound(900, 0.2, 'sine', 0.1), 200);
+}
+function sfxSelect() {
+  playSound(440, 0.1, 'sine', 0.1);
+  playSound(660, 0.15, 'sine', 0.08);
+}
+function sfxDoorHit() {
+  playSound(100, 0.3, 'sawtooth', 0.12);
+  playSound(80, 0.4, 'square', 0.08);
+}
+
+// -- Scaling --
+let scale = 1;
+let offsetX = 0;
+let offsetY = 0;
+function resize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  scale = Math.min(w / BASE_W, h / BASE_H);
+  canvas.style.width = (BASE_W * scale) + 'px';
+  canvas.style.height = (BASE_H * scale) + 'px';
+  offsetX = (w - BASE_W * scale) / 2;
+  offsetY = (h - BASE_H * scale) / 2;
+  canvas.style.marginLeft = offsetX + 'px';
+  canvas.style.marginTop = offsetY + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// -- Input Handling --
+function getCanvasPos(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left) / scale,
+    y: (clientY - rect.top) / scale
+  };
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  const pos = getCanvasPos(e.clientX, e.clientY);
+  mouseX = pos.x;
+  mouseY = pos.y;
+  updateHoverStates();
+});
+
+canvas.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  initAudio();
+  const pos = getCanvasPos(e.clientX, e.clientY);
+  handleClick(pos.x, pos.y);
+});
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  initAudio();
+  const touch = e.touches[0];
+  const pos = getCanvasPos(touch.clientX, touch.clientY);
+  mouseX = pos.x;
+  mouseY = pos.y;
+  handleClick(pos.x, pos.y);
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  const pos = getCanvasPos(touch.clientX, touch.clientY);
+  mouseX = pos.x;
+  mouseY = pos.y;
+  if (state === 'play' && princess) {
+    // Touch movement: move princess toward touch position
+    princess.targetX = Math.max(PRINCESS_MIN_X, Math.min(PRINCESS_MAX_X, pos.x));
+    princess.targetY = Math.max(170, Math.min(BASE_H - 50, pos.y));
+  }
+}, { passive: false });
+
+document.addEventListener('keydown', (e) => {
+  keysDown[e.key.toLowerCase()] = true;
+  if (e.key === ' ' && state === 'play') {
+    e.preventDefault();
+  }
+});
+document.addEventListener('keyup', (e) => {
+  keysDown[e.key.toLowerCase()] = false;
+});
+
+function updateHoverStates() {
+  if (state === 'title') {
+    const bx = BASE_W / 2 - 80, by = 340, bw = 160, bh = 50;
+    hoverStart = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
+  } else if (state === 'gameover') {
+    const bx = BASE_W / 2 - 90, by = 340, bw = 180, bh = 50;
+    hoverRestart = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
+  } else if (state === 'select') {
+    hoverPrincess = -1;
+    for (let i = 0; i < 4; i++) {
+      const px = 120 + i * 160;
+      const py = 180;
+      if (mouseX >= px - 50 && mouseX <= px + 50 && mouseY >= py - 20 && mouseY <= py + 120) {
+        hoverPrincess = i;
+      }
+    }
+  }
+}
+
+function handleClick(x, y) {
+  if (state === 'title') {
+    const bx = BASE_W / 2 - 80, by = 340, bw = 160, bh = 50;
+    if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) {
+      sfxSelect();
+      state = 'select';
+    }
+    return;
+  }
+
+  if (state === 'select') {
+    for (let i = 0; i < 4; i++) {
+      const px = 120 + i * 160;
+      const py = 180;
+      if (x >= px - 50 && x <= px + 50 && y >= py - 20 && y <= py + 120) {
+        sfxSelect();
+        selectedPrincess = i;
+        startGame();
+        return;
+      }
+    }
+    return;
+  }
+
+  if (state === 'play') {
+    // Swing net toward click point
+    if (netCooldownTimer <= 0 && !netSwing) {
+      swingNet(x, y);
+    }
+    return;
+  }
+
+  if (state === 'gameover') {
+    const bx = BASE_W / 2 - 90, by = 340, bw = 180, bh = 50;
+    if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) {
+      sfxSelect();
+      state = 'select';
+    }
+    return;
+  }
+}
+
+// -- Princess Entity --
+function createPrincess() {
+  return {
+    x: PRINCESS_MIN_X + 50,
+    y: BASE_H / 2,
+    targetX: null,
+    targetY: null,
+    w: 24,
+    h: 32,
+    speed: 180,
+    animFrame: 0,
+    animTimer: 0,
+    facing: 1, // 1 = right
+    swinging: false,
+  };
+}
+
+// -- Net Swing --
+function swingNet(targetX, targetY) {
+  if (!princess) return;
+  const dx = targetX - princess.x;
+  const dy = targetY - princess.y;
+  const angle = Math.atan2(dy, dx);
+
+  princess.facing = dx >= 0 ? 1 : -1;
+
+  netSwing = {
+    startAngle: angle - 0.7,
+    endAngle: angle + 0.7,
+    currentAngle: angle - 0.7,
+    centerX: princess.x,
+    centerY: princess.y,
+    targetAngle: angle,
+    radius: NET_RADIUS,
+    timer: 0,
+    duration: NET_SWING_TIME,
+    hitEnemies: new Set(),
+  };
+
+  princess.swinging = true;
+  sfxSwing();
+}
+
+// -- Enemy Entity --
+function createEnemy(type) {
+  const def = ENEMY_TYPES[type];
+  const yMin = 200;
+  const yMax = BASE_H - 60;
+  return {
+    type: type,
+    x: ENEMY_SPAWN_X,
+    y: yMin + Math.random() * (yMax - yMin),
+    w: def.w,
+    h: def.h,
+    speed: def.speed * (0.9 + Math.random() * 0.2),
+    hp: def.hp,
+    maxHp: def.hp,
+    points: def.points,
+    animFrame: 0,
+    animTimer: 0,
+    hitFlash: 0,
+    baseY: 0,
+    zigzagTimer: Math.random() * Math.PI * 2,
+    alive: true,
+  };
+}
+
+// -- Particles --
+function spawnParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x: x,
+      y: y,
+      vx: (Math.random() - 0.5) * 200,
+      vy: (Math.random() - 0.5) * 200 - 50,
+      life: 0.5 + Math.random() * 0.5,
+      maxLife: 0.5 + Math.random() * 0.5,
+      color: color,
+      size: 2 + Math.random() * 4,
+    });
+  }
+}
+
+function spawnScorePopup(x, y, text, color) {
+  scorePopups.push({
+    x: x,
+    y: y,
+    text: text,
+    color: color,
+    life: 1.0,
+  });
+}
+
+// -- Game Init --
+function initStarField() {
+  starField = [];
+  for (let i = 0; i < 40; i++) {
+    starField.push({
+      x: Math.random() * BASE_W,
+      y: Math.random() * BASE_H * 0.4,
+      size: 1 + Math.random() * 2,
+      twinkle: Math.random() * Math.PI * 2,
+    });
+  }
+}
+
+function initCastleDecorations() {
+  castleDecorations = [];
+  // Torch positions
+  castleDecorations.push({ type: 'torch', x: 60, y: 250 });
+  castleDecorations.push({ type: 'torch', x: 180, y: 250 });
+  // Banner
+  castleDecorations.push({ type: 'banner', x: 120, y: 160 });
+  // Window
+  castleDecorations.push({ type: 'window', x: 80, y: 160 });
+  castleDecorations.push({ type: 'window', x: 170, y: 160 });
+}
+
+function startGame() {
+  state = 'play';
+  score = 0;
+  wave = 0;
+  lives = 3;
+  enemies = [];
+  particles = [];
+  scorePopups = [];
+  princess = createPrincess();
+  comboCount = 0;
+  comboTimer = 0;
+  netSwing = null;
+  netCooldownTimer = 0;
+  screenShake = 0;
+  startWave();
+}
+
+function startWave() {
+  wave++;
+  waveEnemiesSpawned = 0;
+  const waveIdx = Math.min(wave - 1, WAVE_DEFS.length - 1);
+  const def = WAVE_DEFS[waveIdx];
+  // Scale count for waves beyond the defined ones
+  const extraWaves = Math.max(0, wave - WAVE_DEFS.length);
+  waveEnemiesTotal = def.count + extraWaves * 2;
+  waveTimer = 0;
+  state = 'waveAnnounce';
+  waveAnnounceTimer = 1.5;
+  sfxWave();
+}
+
+// -- Update Functions --
+function updatePrincess(dt) {
+  if (!princess) return;
+
+  // Keyboard movement (4 directions)
+  let moveX = 0;
+  let moveY = 0;
+  if (keysDown['arrowup'] || keysDown['w']) moveY -= 1;
+  if (keysDown['arrowdown'] || keysDown['s']) moveY += 1;
+  if (keysDown['arrowleft'] || keysDown['a']) moveX -= 1;
+  if (keysDown['arrowright'] || keysDown['d']) moveX += 1;
+
+  if (moveX !== 0 || moveY !== 0) {
+    // Normalize diagonal movement
+    const len = Math.sqrt(moveX * moveX + moveY * moveY);
+    princess.x += (moveX / len) * princess.speed * dt;
+    princess.y += (moveY / len) * princess.speed * dt;
+    if (moveX !== 0) princess.facing = moveX > 0 ? 1 : -1;
+  } else if (princess.targetX !== null && princess.targetY !== null) {
+    // Smooth move toward touch target
+    const diffX = princess.targetX - princess.x;
+    const diffY = princess.targetY - princess.y;
+    const dist = Math.sqrt(diffX * diffX + diffY * diffY);
+    if (dist > 5) {
+      princess.x += (diffX / dist) * princess.speed * dt;
+      princess.y += (diffY / dist) * princess.speed * dt;
+      if (Math.abs(diffX) > 2) princess.facing = diffX > 0 ? 1 : -1;
+    }
+  }
+
+  // Clamp position to play field
+  princess.x = Math.max(PRINCESS_MIN_X, Math.min(PRINCESS_MAX_X, princess.x));
+  princess.y = Math.max(170, Math.min(BASE_H - 50, princess.y));
+
+  // Animation
+  princess.animTimer += dt;
+  if (princess.animTimer > 0.2) {
+    princess.animTimer = 0;
+    princess.animFrame = (princess.animFrame + 1) % 4;
+  }
+}
+
+function updateNet(dt) {
+  if (!netSwing) return;
+
+  netSwing.timer += dt * 1000;
+  const progress = Math.min(netSwing.timer / netSwing.duration, 1);
+  netSwing.currentAngle = netSwing.startAngle + (netSwing.endAngle - netSwing.startAngle) * easeOutQuad(progress);
+
+  // Update center to follow princess
+  netSwing.centerX = princess.x;
+  netSwing.centerY = princess.y;
+
+  // Check collisions with enemies
+  const netTipX = netSwing.centerX + Math.cos(netSwing.currentAngle) * netSwing.radius;
+  const netTipY = netSwing.centerY + Math.sin(netSwing.currentAngle) * netSwing.radius;
+
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (!e.alive || netSwing.hitEnemies.has(e)) continue;
+
+    const ex = e.x;
+    const ey = e.y;
+    // Check distance from net arc (check multiple points along the net)
+    for (let t = 0.3; t <= 1.0; t += 0.15) {
+      const checkX = netSwing.centerX + Math.cos(netSwing.currentAngle) * (netSwing.radius * t);
+      const checkY = netSwing.centerY + Math.sin(netSwing.currentAngle) * (netSwing.radius * t);
+      const dist = Math.sqrt((checkX - ex) * (checkX - ex) + (checkY - ey) * (checkY - ey));
+      if (dist < e.w + 15) {
+        netSwing.hitEnemies.add(e);
+        hitEnemy(e);
+        break;
+      }
+    }
+  }
+
+  if (progress >= 1) {
+    netSwing = null;
+    netCooldownTimer = NET_COOLDOWN;
+    if (princess) princess.swinging = false;
+  }
+}
+
+function hitEnemy(e) {
+  e.hp--;
+  e.hitFlash = 0.15;
+  sfxHit();
+
+  if (e.hp <= 0) {
+    e.alive = false;
+    let points = e.points;
+
+    // Combo system
+    comboCount++;
+    comboTimer = 1.5;
+    let multiplier = 1;
+    if (comboCount >= 5) multiplier = 3;
+    else if (comboCount >= 3) multiplier = 2;
+
+    points *= multiplier;
+    score += points;
+
+    const popupText = multiplier > 1 ? `+${points} x${multiplier}!` : `+${points}`;
+    const popupColor = multiplier > 1 ? C.titleGold : C.white;
+    spawnScorePopup(e.x, e.y - 20, popupText, popupColor);
+    sfxCatch();
+
+    const def = ENEMY_TYPES[e.type];
+    spawnParticles(e.x, e.y, def.color, 8);
+    spawnParticles(e.x, e.y, C.titleGold, 4);
+  } else {
+    spawnParticles(e.x, e.y, '#ffffff', 3);
+  }
+}
+
+function updateEnemies(dt) {
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (!e.alive) {
+      enemies.splice(i, 1);
+      continue;
+    }
+
+    // Movement
+    const def = ENEMY_TYPES[e.type];
+    e.x -= e.speed * 60 * dt;
+
+    // Wizard zigzag
+    if (e.type === 'wizard') {
+      e.zigzagTimer += dt * 3;
+      e.y += Math.sin(e.zigzagTimer) * 1.5;
+    }
+
+    // Clamp Y
+    e.y = Math.max(180, Math.min(BASE_H - 50, e.y));
+
+    // Animation
+    e.animTimer += dt;
+    if (e.animTimer > 0.25) {
+      e.animTimer = 0;
+      e.animFrame = (e.animFrame + 1) % 2;
+    }
+
+    // Hit flash
+    if (e.hitFlash > 0) e.hitFlash -= dt;
+
+    // Check if enemy is dangerously close to princess (and princess isn't swinging)
+    if (princess && !princess.swinging) {
+      const dx = e.x - princess.x;
+      const dy = e.y - princess.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < DANGER_RADIUS) {
+        // Princess takes damage from enemy contact
+        enemies.splice(i, 1);
+        lives--;
+        screenShake = 0.3;
+        sfxDoorHit();
+        spawnParticles(princess.x, princess.y, C.red, 10);
+
+        if (lives <= 0) {
+          gameOverReason = 'defeated';
+          gameOver();
+          return;
+        }
+        continue;
+      }
+    }
+
+    // Reached the castle door? GAME OVER!
+    if (e.x <= DOOR_X + DOOR_W / 2) {
+      enemies.splice(i, 1);
+      screenShake = 0.5;
+      sfxDoorHit();
+      spawnParticles(DOOR_X + DOOR_W / 2, e.y, C.red, 20);
+      gameOverReason = 'breached';
+      gameOver();
+      return;
+    }
+  }
+}
+
+function updateSpawning(dt) {
+  if (state !== 'play') return;
+  const waveIdx = Math.min(wave - 1, WAVE_DEFS.length - 1);
+  const def = WAVE_DEFS[waveIdx];
+  const extraWaves = Math.max(0, wave - WAVE_DEFS.length);
+  const interval = Math.max(400, def.spawnInterval - extraWaves * 50);
+
+  waveTimer += dt * 1000;
+  if (waveTimer >= interval && waveEnemiesSpawned < waveEnemiesTotal) {
+    waveTimer = 0;
+    waveEnemiesSpawned++;
+
+    // Pick random type from wave types
+    const types = def.types;
+    const type = types[Math.floor(Math.random() * types.length)];
+    enemies.push(createEnemy(type));
+  }
+
+  // Check if wave is complete
+  if (waveEnemiesSpawned >= waveEnemiesTotal && enemies.length === 0) {
+    startWave();
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 300 * dt; // gravity
+    p.life -= dt;
+    if (p.life <= 0) {
+      particles.splice(i, 1);
+    }
+  }
+}
+
+function updateScorePopups(dt) {
+  for (let i = scorePopups.length - 1; i >= 0; i--) {
+    const p = scorePopups[i];
+    p.y -= 40 * dt;
+    p.life -= dt;
+    if (p.life <= 0) {
+      scorePopups.splice(i, 1);
+    }
+  }
+}
+
+function updateCombo(dt) {
+  if (comboTimer > 0) {
+    comboTimer -= dt;
+    if (comboTimer <= 0) {
+      comboCount = 0;
+    }
+  }
+}
+
+function gameOver() {
+  state = 'gameover';
+  if (score > highScore) {
+    highScore = score;
+    localStorage.setItem('princessHeroHighScore', highScore.toString());
+  }
+  sfxGameOver();
+}
+
+function easeOutQuad(t) {
+  return t * (2 - t);
+}
+
+// -- Sky themes based on wave (cycles every 4 waves) --
+function getSkyTheme() {
+  // Wave 1,5,9...: Dawn (goblins), Wave 2,6,10...: Midday (bandits), etc.
+  const w = Math.max(1, wave);
+  const phase = ((w - 1) % 4) + 1; // 1-4 cycle
+
+  if (phase === 1) {
+    return {
+      skyTop: '#4a3060',
+      skyBottom: '#ff9966',
+      hillColor: '#2a3a2a',
+      grassTop: '#3a7a34',
+      grassBottom: '#2a5a24',
+      showStars: false,
+      sunMoon: 'sun',
+      sunMoonY: 60
+    };
+  } else if (phase === 2) {
+    return {
+      skyTop: '#2277cc',
+      skyBottom: '#66bbff',
+      hillColor: '#2a6a2a',
+      grassTop: '#4a9c3f',
+      grassBottom: '#3a7a34',
+      showStars: false,
+      sunMoon: 'sun',
+      sunMoonY: 30
+    };
+  } else if (phase === 3) {
+    return {
+      skyTop: '#552244',
+      skyBottom: '#ff6633',
+      hillColor: '#1a2a1a',
+      grassTop: '#3a6a30',
+      grassBottom: '#2a4a24',
+      showStars: false,
+      sunMoon: 'sun',
+      sunMoonY: 100
+    };
+  } else {
+    return {
+      skyTop: '#0a0a1a',
+      skyBottom: '#1a1a3a',
+      hillColor: '#0a1a0a',
+      grassTop: '#1a3a1a',
+      grassBottom: '#0a2a0a',
+      showStars: true,
+      sunMoon: 'moon',
+      sunMoonY: 40
+    };
+  }
+}
+
+// -- Draw Functions --
+function drawBackground() {
+  const theme = getSkyTheme();
+
+  // Sky gradient
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, BASE_H * 0.4);
+  skyGrad.addColorStop(0, theme.skyTop);
+  skyGrad.addColorStop(1, theme.skyBottom);
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(CASTLE_WALL_X + 50, 0, BASE_W, BASE_H * 0.4);
+
+  // Sun or Moon
+  const celestialX = BASE_W - 100;
+  if (theme.sunMoon === 'sun') {
+    // Sun
+    ctx.fillStyle = '#ffdd44';
+    ctx.beginPath();
+    ctx.arc(celestialX, theme.sunMoonY, 25, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffee88';
+    ctx.beginPath();
+    ctx.arc(celestialX, theme.sunMoonY, 18, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // Moon
+    ctx.fillStyle = '#ddddcc';
+    ctx.beginPath();
+    ctx.arc(celestialX, theme.sunMoonY, 20, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ccccbb';
+    ctx.beginPath();
+    ctx.arc(celestialX - 3, theme.sunMoonY - 2, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(celestialX + 6, theme.sunMoonY + 5, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Stars (only at night)
+  titleAnimTime += dt;
+  if (theme.showStars) {
+    for (const star of starField) {
+      const twinkle = Math.sin(titleAnimTime * 3 + star.twinkle);
+      const alpha = 0.4 + 0.5 * twinkle;
+      const size = star.size * (0.8 + 0.4 * twinkle);
+      if (star.x > CASTLE_WALL_X + 50) {
+        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+        ctx.fillRect(Math.floor(star.x), Math.floor(star.y), size, size);
+      }
+    }
+  }
+
+  // Distant hills
+  ctx.fillStyle = theme.hillColor;
+  for (let x = CASTLE_WALL_X + 50; x < BASE_W; x += 3) {
+    const h = 30 + Math.sin(x * 0.015) * 20 + Math.sin(x * 0.007) * 15;
+    ctx.fillRect(x, BASE_H * 0.4 - h, 3, h);
+  }
+
+  // Grass field
+  const grassGrad = ctx.createLinearGradient(0, BASE_H * 0.4, 0, BASE_H);
+  grassGrad.addColorStop(0, theme.grassTop);
+  grassGrad.addColorStop(1, theme.grassBottom);
+  ctx.fillStyle = grassGrad;
+  ctx.fillRect(CASTLE_WALL_X + 50, BASE_H * 0.4, BASE_W, BASE_H);
+
+  // Grass tufts
+  ctx.fillStyle = C.grassLight;
+  for (let x = CASTLE_WALL_X + 60; x < BASE_W; x += 40) {
+    for (let y = BASE_H * 0.42; y < BASE_H - 20; y += 50) {
+      const ox = Math.sin(x * 0.1 + y * 0.1) * 10;
+      ctx.fillRect(x + ox, y, 6, 3);
+      ctx.fillRect(x + ox - 3, y + 1, 3, 2);
+      ctx.fillRect(x + ox + 5, y + 1, 3, 2);
+    }
+  }
+
+  // Path (subtle)
+  ctx.fillStyle = C.path;
+  ctx.globalAlpha = 0.3;
+  ctx.fillRect(CASTLE_WALL_X + 50, BASE_H * 0.55, BASE_W, 60);
+  ctx.fillStyle = C.pathDark;
+  ctx.fillRect(CASTLE_WALL_X + 50, BASE_H * 0.55 + 60, BASE_W, 5);
+  ctx.globalAlpha = 1;
+
+  // Castle wall (left side)
+  drawCastleWall();
+}
+
+function drawCastleWall() {
+  // Main wall
+  ctx.fillStyle = C.castleWall;
+  ctx.fillRect(0, 0, CASTLE_WALL_X + 50, BASE_H);
+
+  // Stone brick pattern
+  ctx.fillStyle = C.castleWallDark;
+  for (let y = 0; y < BASE_H; y += 24) {
+    const offset = (Math.floor(y / 24) % 2) * 24;
+    for (let x = offset; x < CASTLE_WALL_X + 50; x += 48) {
+      ctx.fillRect(x, y, 47, 23);
+      ctx.fillStyle = C.castleWallLight;
+      ctx.fillRect(x + 1, y + 1, 45, 1);
+      ctx.fillRect(x + 1, y + 1, 1, 21);
+      ctx.fillStyle = C.castleWallDark;
+    }
+  }
+
+  // Castle interior darker
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.fillRect(0, 0, CASTLE_WALL_X - 20, BASE_H);
+
+  // Floor
+  ctx.fillStyle = C.castleFloor;
+  ctx.fillRect(0, BASE_H * 0.7, CASTLE_WALL_X + 50, BASE_H * 0.3);
+  ctx.fillStyle = C.castleFloorDark;
+  for (let x = 0; x < CASTLE_WALL_X + 50; x += 32) {
+    ctx.fillRect(x, BASE_H * 0.7, 1, BASE_H * 0.3);
+  }
+
+  // Battlements at top
+  for (let x = 0; x < CASTLE_WALL_X + 50; x += 30) {
+    ctx.fillStyle = C.castleWall;
+    ctx.fillRect(x, 0, 20, 30);
+    ctx.fillStyle = C.castleWallLight;
+    ctx.fillRect(x + 1, 1, 18, 2);
+  }
+
+  // Door/gate
+  ctx.fillStyle = C.doorFrame;
+  ctx.fillRect(DOOR_X - 5, DOOR_Y - 5, DOOR_W + 10, DOOR_H + 10);
+  ctx.fillStyle = C.door;
+  ctx.fillRect(DOOR_X, DOOR_Y, DOOR_W, DOOR_H);
+  ctx.fillStyle = C.doorDark;
+  ctx.fillRect(DOOR_X + DOOR_W / 2 - 1, DOOR_Y, 2, DOOR_H);
+  // Door arch
+  ctx.fillStyle = C.doorFrame;
+  ctx.beginPath();
+  ctx.arc(DOOR_X + DOOR_W / 2, DOOR_Y, DOOR_W / 2 + 5, Math.PI, 0);
+  ctx.fill();
+  ctx.fillStyle = C.door;
+  ctx.beginPath();
+  ctx.arc(DOOR_X + DOOR_W / 2, DOOR_Y, DOOR_W / 2, Math.PI, 0);
+  ctx.fill();
+  // Door handle
+  ctx.fillStyle = C.titleGold;
+  ctx.fillRect(DOOR_X + 10, DOOR_Y + DOOR_H / 2, 4, 4);
+  ctx.fillRect(DOOR_X + DOOR_W - 14, DOOR_Y + DOOR_H / 2, 4, 4);
+
+  // Decorations
+  for (const dec of castleDecorations) {
+    if (dec.type === 'torch') {
+      drawTorch(dec.x, dec.y);
+    } else if (dec.type === 'banner') {
+      drawBanner(dec.x, dec.y);
+    } else if (dec.type === 'window') {
+      drawWindow(dec.x, dec.y);
+    }
+  }
+}
+
+function drawTorch(x, y) {
+  // Bracket
+  ctx.fillStyle = '#888';
+  ctx.fillRect(x - 1, y - 8, 4, 14);
+  ctx.fillRect(x - 4, y - 8, 10, 3);
+  // Flame
+  const flicker = Math.sin(titleAnimTime * 10 + x) * 2;
+  ctx.fillStyle = '#ff8800';
+  ctx.fillRect(x - 2 + flicker, y - 16, 6, 8);
+  ctx.fillStyle = '#ffcc00';
+  ctx.fillRect(x - 1 + flicker, y - 14, 4, 5);
+  ctx.fillStyle = '#ffff88';
+  ctx.fillRect(x + flicker, y - 12, 2, 3);
+  // Glow
+  ctx.globalAlpha = 0.15 + Math.sin(titleAnimTime * 8 + x) * 0.05;
+  ctx.fillStyle = '#ff8800';
+  ctx.beginPath();
+  ctx.arc(x + 1, y - 12, 25, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawBanner(x, y) {
+  ctx.fillStyle = '#cc2244';
+  ctx.fillRect(x - 12, y, 24, 40);
+  ctx.fillStyle = '#aa1133';
+  ctx.fillRect(x - 12, y, 24, 2);
+  // Banner point
+  ctx.fillStyle = '#cc2244';
+  ctx.beginPath();
+  ctx.moveTo(x - 12, y + 40);
+  ctx.lineTo(x, y + 50);
+  ctx.lineTo(x + 12, y + 40);
+  ctx.fill();
+  // Crown symbol on banner
+  ctx.fillStyle = C.titleGold;
+  ctx.fillRect(x - 6, y + 12, 12, 2);
+  ctx.fillRect(x - 6, y + 10, 2, 4);
+  ctx.fillRect(x - 2, y + 8, 2, 6);
+  ctx.fillRect(x + 2, y + 10, 2, 4);
+  ctx.fillRect(x + 4, y + 10, 2, 4);
+  // Pole
+  ctx.fillStyle = '#888';
+  ctx.fillRect(x - 14, y - 2, 28, 3);
+}
+
+function drawWindow(x, y) {
+  ctx.fillStyle = '#222244';
+  ctx.fillRect(x - 8, y - 12, 16, 24);
+  ctx.fillStyle = '#334466';
+  ctx.fillRect(x - 6, y - 10, 12, 20);
+  // Cross bars
+  ctx.fillStyle = '#666688';
+  ctx.fillRect(x - 1, y - 10, 2, 20);
+  ctx.fillRect(x - 6, y - 1, 12, 2);
+  // Slight glow from outside
+  ctx.globalAlpha = 0.1;
+  ctx.fillStyle = '#6688bb';
+  ctx.fillRect(x - 6, y - 10, 12, 20);
+  ctx.globalAlpha = 1;
+}
+
+function drawPrincess() {
+  if (!princess) return;
+  const p = PRINCESS_DATA[selectedPrincess];
+  const x = Math.floor(princess.x);
+  const y = Math.floor(princess.y);
+  const f = princess.animFrame;
+  const bobY = Math.sin(f * Math.PI / 2) * 1;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 16, 10, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const facing = princess.facing;
+  const fx = facing === 1 ? 1 : -1;
+
+  ctx.save();
+  ctx.translate(x, y + bobY);
+  ctx.scale(fx, 1);
+
+  // Dress (body)
+  ctx.fillStyle = p.dress;
+  ctx.fillRect(-8, -4, 16, 20);
+  // Dress flare
+  ctx.fillRect(-10, 8, 20, 8);
+  ctx.fillStyle = p.dressDark;
+  ctx.fillRect(-10, 14, 20, 2);
+  ctx.fillRect(-8, 4, 2, 12);
+
+  // Dress sparkles for all princesses
+  const sparkleColors = [
+    {main: '#ffddee', cross: '#ffaacc'}, // Rose - pink sparkles
+    {main: '#ffffff', cross: '#aaccff'}, // Azure - blue-white sparkles
+    {main: '#ddffdd', cross: '#88dd88'}, // Jade - green sparkles
+    {main: '#eeddff', cross: '#cc99ff'}  // Violet - purple sparkles
+  ];
+  const sparkles = [{x:-4,y:0},{x:3,y:6},{x:-6,y:10},{x:5,y:2},{x:-2,y:12}];
+  for (let si = 0; si < sparkles.length; si++) {
+    const a = Math.sin(titleAnimTime * 3 + si * 1.5) * 0.5 + 0.5;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = sparkleColors[selectedPrincess].main;
+    ctx.fillRect(sparkles[si].x, sparkles[si].y, 1, 1);
+    ctx.fillStyle = sparkleColors[selectedPrincess].cross;
+    ctx.fillRect(sparkles[si].x - 1, sparkles[si].y, 3, 1);
+    ctx.fillRect(sparkles[si].x, sparkles[si].y - 1, 1, 3);
+  }
+  ctx.globalAlpha = 1;
+
+  // Skin (face/neck)
+  ctx.fillStyle = p.skin;
+  ctx.fillRect(-5, -14, 10, 12);
+  ctx.fillStyle = p.skinDark;
+  ctx.fillRect(-5, -4, 10, 2);
+
+  // Violet: heart-shaped neckline (skin visible on neck/upper chest)
+  if (selectedPrincess === 3) {
+    ctx.fillStyle = p.skin;
+    ctx.fillRect(0, -2, 4, 3);    // neck/upper chest visible from side
+    ctx.fillRect(-1, 0, 5, 2);    // wider heart bump
+    ctx.fillRect(0, 2, 3, 1);     // narrowing
+    ctx.fillRect(1, 3, 1, 1);     // V point
+    // Neckline edge
+    ctx.fillStyle = p.dressDark;
+    ctx.fillRect(-1, 2, 1, 1);
+    ctx.fillRect(3, 2, 1, 1);
+    ctx.fillRect(0, 3, 1, 1);
+    ctx.fillRect(2, 3, 1, 1);
+  }
+
+  // Hair
+  ctx.fillStyle = p.hair;
+  ctx.fillRect(-6, -18, 12, 8);
+  ctx.fillRect(-7, -16, 2, 12);
+  ctx.fillRect(5, -16, 2, 12);
+  ctx.fillStyle = p.hairDark;
+  ctx.fillRect(-6, -18, 12, 2);
+
+  // Azure braid (hangs from back/left side of hair)
+  if (selectedPrincess === 1) {
+    ctx.fillStyle = p.hair;
+    ctx.fillRect(-8, -4, 2, 3);
+    ctx.fillStyle = p.hairDark;
+    ctx.fillRect(-9, -1, 2, 3);
+    ctx.fillStyle = p.hair;
+    ctx.fillRect(-8, 2, 2, 3);
+    ctx.fillStyle = p.hairDark;
+    ctx.fillRect(-9, 5, 2, 3);
+    ctx.fillStyle = p.hair;
+    ctx.fillRect(-8, 8, 2, 2);
+    // Braid tie
+    ctx.fillStyle = p.braidTie || '#4a90d9';
+    ctx.fillRect(-9, 10, 3, 2);
+  }
+
+  // Violet: soft wavy hair falling into dress area
+  if (selectedPrincess === 3) {
+    ctx.fillStyle = p.hair;
+    // Back (left) side - long wavy fall
+    ctx.fillRect(-7, -4, 2, 12);    // main fall, y:-4 to 8
+    ctx.fillRect(-8, -8, 1, 4);     // wave out, y:-8 to -4
+    ctx.fillRect(-8, 0, 1, 5);      // wave out lower, y:0 to 5
+    ctx.fillRect(-9, -6, 1, 3);     // outer wave crest
+    ctx.fillRect(-9, 2, 1, 3);      // outer wave crest lower
+    // Front (right) side - shorter wavy fall
+    ctx.fillRect(5, -4, 2, 8);      // main fall, y:-4 to 4
+    ctx.fillRect(6, -6, 1, 3);      // wave out, y:-6 to -3
+    ctx.fillRect(7, -4, 1, 3);      // outer wave crest
+    ctx.fillRect(6, 2, 1, 3);       // wave out lower
+    // Wave dark accents (depth/shadow)
+    ctx.fillStyle = p.hairDark;
+    ctx.fillRect(-7, -6, 1, 2);
+    ctx.fillRect(-8, -4, 1, 2);
+    ctx.fillRect(-7, 2, 1, 2);
+    ctx.fillRect(-8, 5, 1, 2);
+    ctx.fillRect(6, -4, 1, 2);
+    ctx.fillRect(5, 0, 1, 2);
+    ctx.fillRect(6, 4, 1, 1);
+    // Soft tapered tips
+    ctx.fillStyle = p.hair;
+    ctx.fillRect(-7, 8, 1, 1);
+    ctx.fillRect(5, 4, 1, 1);
+  }
+
+  // Crown
+  ctx.fillStyle = p.crown;
+  ctx.fillRect(-5, -20, 10, 3);
+  ctx.fillRect(-5, -22, 2, 4);
+  ctx.fillRect(-1, -23, 2, 5);
+  ctx.fillRect(3, -22, 2, 4);
+
+  // Eyes (all princesses have eyes in visible face area)
+  const eyeY = -9;
+  ctx.fillStyle = p.eye;
+  ctx.fillRect(1, eyeY, 3, 2);
+  ctx.fillStyle = C.white;
+  ctx.fillRect(2, eyeY, 1, 1);
+
+  // Mouth
+  const mouthY = -6;
+  ctx.fillStyle = '#cc6666';
+  ctx.fillRect(1, mouthY, 2, 1);
+
+  // Arm (swinging or idle)
+  ctx.fillStyle = p.skin;
+  if (princess.swinging && netSwing) {
+    const armAngle = netSwing.currentAngle * fx;
+    ctx.save();
+    ctx.translate(4, 0);
+    ctx.rotate(armAngle * 0.5);
+    ctx.fillRect(0, -2, 12, 4);
+    ctx.restore();
+  } else {
+    ctx.fillRect(6, -2, 4, 10);
+  }
+
+  ctx.restore();
+}
+
+function drawNet() {
+  if (!netSwing) return;
+
+  const swing = netSwing;
+  const progress = swing.timer / swing.duration;
+
+  // Net arc trail
+  ctx.strokeStyle = C.netRope;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  const steps = 20;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const angle = swing.startAngle + (swing.currentAngle - swing.startAngle) * t;
+    const r = swing.radius;
+    const px = swing.centerX + Math.cos(angle) * r;
+    const py = swing.centerY + Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.globalAlpha = 0.3;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Rope from princess to net
+  const tipX = swing.centerX + Math.cos(swing.currentAngle) * swing.radius;
+  const tipY = swing.centerY + Math.sin(swing.currentAngle) * swing.radius;
+
+  ctx.strokeStyle = C.netRope;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(swing.centerX, swing.centerY);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+
+  // Net head (circle mesh)
+  const netSize = 18;
+  ctx.strokeStyle = C.netColor;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(tipX, tipY, netSize, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Net mesh lines
+  ctx.beginPath();
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + swing.currentAngle;
+    ctx.moveTo(tipX + Math.cos(a) * 4, tipY + Math.sin(a) * 4);
+    ctx.lineTo(tipX + Math.cos(a) * netSize, tipY + Math.sin(a) * netSize);
+  }
+  ctx.stroke();
+
+  // Cross mesh
+  ctx.beginPath();
+  ctx.arc(tipX, tipY, netSize * 0.5, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Glow effect
+  ctx.globalAlpha = 0.2;
+  ctx.fillStyle = C.netGlow;
+  ctx.beginPath();
+  ctx.arc(tipX, tipY, netSize + 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawEnemy(e) {
+  const def = ENEMY_TYPES[e.type];
+  const x = Math.floor(e.x);
+  const y = Math.floor(e.y);
+  const f = e.animFrame;
+  const walkBob = f === 0 ? 0 : -1;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + e.h / 2 + 2, e.w / 2, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.translate(x, y + walkBob);
+
+  if (e.hitFlash > 0) {
+    ctx.globalAlpha = 0.5 + Math.sin(e.hitFlash * 40) * 0.5;
+  }
+
+  if (e.type === 'goblin') {
+    drawGoblin(e, def);
+  } else if (e.type === 'bandit') {
+    drawBandit(e, def);
+  } else if (e.type === 'knight') {
+    drawKnight(e, def);
+  } else if (e.type === 'wizard') {
+    drawWizard(e, def);
+  }
+
+  // HP bar for multi-hit enemies
+  if (e.maxHp > 1 && e.hp > 0) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(-e.w / 2, -e.h / 2 - 8, e.w, 4);
+    ctx.fillStyle = e.hp > 1 ? C.healthGreen : C.healthRed;
+    ctx.fillRect(-e.w / 2, -e.h / 2 - 8, e.w * (e.hp / e.maxHp), 4);
+  }
+
+  ctx.restore();
+}
+
+function drawGoblin(e, def) {
+  // Body - hunched posture
+  ctx.fillStyle = def.color;
+  ctx.fillRect(-7, -4, 14, 16);
+  // Head - larger with pronounced features
+  ctx.fillRect(-6, -14, 12, 12);
+  ctx.fillStyle = def.colorDark;
+  ctx.fillRect(-6, -14, 12, 2);
+  // Big pointy ears
+  ctx.fillStyle = def.color;
+  ctx.fillRect(-10, -12, 4, 8);
+  ctx.fillRect(-11, -10, 2, 4);
+  ctx.fillRect(6, -12, 4, 8);
+  ctx.fillRect(9, -10, 2, 4);
+  // Ear inner
+  ctx.fillStyle = '#88aa88';
+  ctx.fillRect(-9, -10, 2, 4);
+  ctx.fillRect(7, -10, 2, 4);
+  // Big red eyes
+  ctx.fillStyle = def.eyeColor;
+  ctx.fillRect(-4, -10, 3, 3);
+  ctx.fillRect(1, -10, 3, 3);
+  ctx.fillStyle = '#ffaaaa';
+  ctx.fillRect(-3, -9, 1, 1);
+  ctx.fillRect(2, -9, 1, 1);
+  // Nose
+  ctx.fillStyle = def.colorDark;
+  ctx.fillRect(-1, -7, 2, 2);
+  // Mouth with fangs
+  ctx.fillStyle = '#223322';
+  ctx.fillRect(-3, -4, 6, 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(-2, -4, 1, 2);
+  ctx.fillRect(1, -4, 1, 2);
+  // Legs
+  ctx.fillStyle = def.colorDark;
+  const legOff = e.animFrame === 0 ? 0 : 3;
+  ctx.fillRect(-5, 12, 4, 6 + legOff);
+  ctx.fillRect(1, 12, 4, 6 - legOff);
+  // Weapon (crude club)
+  ctx.fillStyle = '#6b4914';
+  ctx.fillRect(7, -2, 4, 12);
+  ctx.fillRect(6, 6, 6, 4);
+}
+
+function drawBandit(e, def) {
+  // Body - athletic build
+  ctx.fillStyle = def.color;
+  ctx.fillRect(-8, -6, 16, 18);
+  // Vest details
+  ctx.fillStyle = def.colorDark;
+  ctx.fillRect(-8, -6, 3, 18);
+  ctx.fillRect(5, -6, 3, 18);
+  // Belt with pouches
+  ctx.fillStyle = '#3a2510';
+  ctx.fillRect(-8, 5, 16, 4);
+  ctx.fillStyle = '#4a3520';
+  ctx.fillRect(-6, 4, 4, 5);
+  ctx.fillRect(2, 4, 4, 5);
+  ctx.fillStyle = C.titleGold;
+  ctx.fillRect(-1, 5, 2, 3);
+  // Head
+  ctx.fillStyle = '#ddaa88';
+  ctx.fillRect(-5, -16, 10, 12);
+  // Bandana/mask
+  ctx.fillStyle = '#882222';
+  ctx.fillRect(-6, -16, 12, 4);
+  ctx.fillRect(-6, -8, 12, 3);
+  // Shifty eyes
+  ctx.fillStyle = def.eyeColor;
+  ctx.fillRect(-4, -12, 3, 3);
+  ctx.fillRect(1, -12, 3, 3);
+  ctx.fillStyle = '#222';
+  ctx.fillRect(-3, -11, 2, 2);
+  ctx.fillRect(2, -11, 2, 2);
+  // Eyebrows (angry)
+  ctx.fillStyle = '#553322';
+  ctx.fillRect(-4, -13, 3, 1);
+  ctx.fillRect(1, -13, 3, 1);
+  // Legs
+  ctx.fillStyle = '#553322';
+  const legOff = e.animFrame === 0 ? 0 : 3;
+  ctx.fillRect(-6, 12, 5, 8 + legOff);
+  ctx.fillRect(1, 12, 5, 8 - legOff);
+  // Boots
+  ctx.fillStyle = '#332211';
+  ctx.fillRect(-7, 18 + legOff, 6, 3);
+  ctx.fillRect(0, 18 - legOff, 6, 3);
+  // Two daggers
+  ctx.fillStyle = '#dddddd';
+  ctx.fillRect(8, -6, 2, 10);
+  ctx.fillRect(8, 2, 3, 2);
+  ctx.fillStyle = '#aaaaaa';
+  ctx.fillRect(-10, -4, 2, 8);
+  ctx.fillStyle = '#553322';
+  ctx.fillRect(8, 4, 2, 3);
+  ctx.fillRect(-10, 4, 2, 3);
+}
+
+function drawKnight(e, def) {
+  // Heavy armor body - bulkier
+  ctx.fillStyle = def.color;
+  ctx.fillRect(-10, -10, 20, 24);
+  // Armor plates
+  ctx.fillStyle = def.colorDark;
+  ctx.fillRect(-10, -10, 20, 3);
+  ctx.fillRect(-10, 0, 20, 2);
+  ctx.fillRect(-10, 8, 20, 3);
+  // Armor highlights
+  ctx.fillStyle = '#8888aa';
+  ctx.fillRect(-9, -7, 18, 1);
+  ctx.fillRect(-9, 3, 18, 1);
+  // Shoulder pauldrons
+  ctx.fillStyle = def.color;
+  ctx.fillRect(-14, -8, 5, 8);
+  ctx.fillRect(9, -8, 5, 8);
+  ctx.fillStyle = '#8888aa';
+  ctx.fillRect(-13, -7, 3, 1);
+  ctx.fillRect(10, -7, 3, 1);
+  // Great helm
+  ctx.fillStyle = def.color;
+  ctx.fillRect(-7, -22, 14, 14);
+  ctx.fillStyle = def.colorDark;
+  ctx.fillRect(-7, -22, 14, 3);
+  ctx.fillRect(-7, -12, 14, 2);
+  // Face guard
+  ctx.fillStyle = '#333344';
+  ctx.fillRect(-5, -16, 10, 6);
+  // Visor slit (glowing eyes)
+  ctx.fillStyle = def.eyeColor;
+  ctx.fillRect(-4, -14, 3, 2);
+  ctx.fillRect(1, -14, 3, 2);
+  // Helm crest
+  ctx.fillStyle = '#cc2244';
+  ctx.fillRect(-2, -28, 4, 7);
+  ctx.fillRect(0, -30, 2, 9);
+  ctx.fillStyle = '#aa1133';
+  ctx.fillRect(-1, -26, 2, 4);
+  // Large shield with emblem
+  ctx.fillStyle = '#444466';
+  ctx.fillRect(-16, -6, 6, 16);
+  ctx.fillStyle = '#555588';
+  ctx.fillRect(-15, -5, 4, 14);
+  ctx.fillStyle = '#cc2244';
+  ctx.fillRect(-14, -2, 2, 8);
+  ctx.fillRect(-15, 1, 4, 2);
+  // Armored legs
+  ctx.fillStyle = def.color;
+  const legOff = e.animFrame === 0 ? 0 : 2;
+  ctx.fillRect(-8, 14, 7, 10 + legOff);
+  ctx.fillRect(1, 14, 7, 10 - legOff);
+  ctx.fillStyle = def.colorDark;
+  ctx.fillRect(-8, 18, 7, 2);
+  ctx.fillRect(1, 18, 7, 2);
+  // Great sword
+  ctx.fillStyle = '#dddddd';
+  ctx.fillRect(10, -14, 3, 24);
+  ctx.fillStyle = '#aaaaaa';
+  ctx.fillRect(10, -14, 1, 24);
+  ctx.fillStyle = '#888888';
+  ctx.fillRect(8, 8, 7, 3);
+  ctx.fillStyle = '#6b4914';
+  ctx.fillRect(9, 11, 5, 6);
+}
+
+function drawWizard(e, def) {
+  // Flowing robe
+  ctx.fillStyle = def.color;
+  ctx.fillRect(-8, -8, 16, 22);
+  ctx.fillRect(-10, 8, 20, 10);
+  ctx.fillStyle = def.colorDark;
+  ctx.fillRect(-8, -8, 16, 2);
+  // Robe trim
+  ctx.fillStyle = C.titleGold;
+  ctx.fillRect(-10, 8, 20, 2);
+  ctx.fillRect(-8, -8, 2, 22);
+  ctx.fillRect(6, -8, 2, 22);
+  // Mystical symbols on robe
+  ctx.fillStyle = '#ffdd44';
+  const symbolPulse = Math.sin(titleAnimTime * 4 + e.zigzagTimer) * 0.3 + 0.7;
+  ctx.globalAlpha = symbolPulse;
+  ctx.fillRect(-3, 0, 2, 2);
+  ctx.fillRect(-4, 1, 1, 1);
+  ctx.fillRect(-2, 1, 1, 1);
+  ctx.fillRect(-3, 2, 1, 1);
+  ctx.fillRect(2, 5, 2, 2);
+  ctx.fillRect(1, 6, 1, 1);
+  ctx.fillRect(4, 6, 1, 1);
+  ctx.fillRect(-5, 10, 3, 1);
+  ctx.fillRect(-4, 9, 1, 3);
+  ctx.globalAlpha = 1;
+  // Head - older/wiser features
+  ctx.fillStyle = '#ddccbb';
+  ctx.fillRect(-5, -16, 10, 10);
+  // Bushy eyebrows
+  ctx.fillStyle = '#888888';
+  ctx.fillRect(-4, -14, 3, 1);
+  ctx.fillRect(1, -14, 3, 1);
+  // Glowing mystical eyes
+  ctx.fillStyle = def.eyeColor;
+  ctx.fillRect(-3, -13, 2, 2);
+  ctx.fillRect(1, -13, 2, 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(-2, -12, 1, 1);
+  ctx.fillRect(2, -12, 1, 1);
+  // Long flowing beard
+  ctx.fillStyle = '#dddddd';
+  ctx.fillRect(-4, -7, 8, 5);
+  ctx.fillRect(-3, -2, 6, 4);
+  ctx.fillRect(-2, 2, 4, 4);
+  ctx.fillRect(-1, 6, 2, 3);
+  ctx.fillStyle = '#cccccc';
+  ctx.fillRect(-3, -5, 2, 3);
+  ctx.fillRect(1, -4, 2, 2);
+  // Tall pointed wizard hat
+  ctx.fillStyle = def.color;
+  ctx.fillRect(-7, -20, 14, 5);
+  ctx.fillStyle = def.colorDark;
+  ctx.beginPath();
+  ctx.moveTo(-7, -20);
+  ctx.lineTo(0, -36);
+  ctx.lineTo(7, -20);
+  ctx.fill();
+  ctx.fillStyle = def.color;
+  ctx.beginPath();
+  ctx.moveTo(-5, -20);
+  ctx.lineTo(0, -34);
+  ctx.lineTo(5, -20);
+  ctx.fill();
+  // Hat band
+  ctx.fillStyle = C.titleGold;
+  ctx.fillRect(-7, -20, 14, 2);
+  // Hat star (pulsing)
+  ctx.fillStyle = '#ffdd44';
+  ctx.globalAlpha = symbolPulse;
+  ctx.fillRect(-1, -28, 2, 2);
+  ctx.fillRect(-2, -27, 4, 1);
+  ctx.fillRect(0, -29, 1, 1);
+  ctx.fillRect(0, -26, 1, 1);
+  ctx.globalAlpha = 1;
+  // Gnarled wooden staff
+  ctx.fillStyle = '#5a3a14';
+  ctx.fillRect(8, -20, 3, 36);
+  ctx.fillStyle = '#7b5a24';
+  ctx.fillRect(9, -18, 1, 32);
+  // Staff knots
+  ctx.fillStyle = '#4a2a0a';
+  ctx.fillRect(8, -8, 3, 2);
+  ctx.fillRect(8, 4, 3, 2);
+  // Magical orb with particles
+  const orbGlow = Math.sin(titleAnimTime * 5 + e.zigzagTimer) * 0.3 + 0.7;
+  ctx.globalAlpha = 0.3;
+  ctx.fillStyle = '#ff44ff';
+  ctx.beginPath();
+  ctx.arc(9, -24, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = orbGlow;
+  ctx.fillStyle = '#ff88ff';
+  ctx.beginPath();
+  ctx.arc(9, -24, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#ffaaff';
+  ctx.beginPath();
+  ctx.arc(9, -24, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(8, -25, 2, 2);
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(Math.floor(p.x), Math.floor(p.y), p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawScorePopups() {
+  for (const p of scorePopups) {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(p.text, Math.floor(p.x), Math.floor(p.y));
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHUD() {
+  // Score
+  ctx.fillStyle = C.hudBg;
+  ctx.fillRect(10, 10, 150, 30);
+  ctx.fillStyle = C.hudScore;
+  ctx.font = 'bold 18px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('SCORE: ' + score, 18, 32);
+
+  // Wave
+  ctx.fillStyle = C.hudBg;
+  ctx.fillRect(BASE_W / 2 - 55, 10, 110, 30);
+  ctx.fillStyle = C.hudText;
+  ctx.font = 'bold 16px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('WAVE ' + wave, BASE_W / 2, 32);
+
+  // High Score
+  ctx.fillStyle = C.hudBg;
+  ctx.fillRect(BASE_W - 200, 10, 190, 30);
+  ctx.fillStyle = C.hudText;
+  ctx.font = '14px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('HI-SCORE: ' + highScore, BASE_W - 18, 30);
+
+  // Lives
+  ctx.fillStyle = C.hudBg;
+  ctx.fillRect(10, 46, 100, 26);
+  ctx.fillStyle = C.hudText;
+  ctx.font = '14px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('LIVES:', 18, 64);
+  for (let i = 0; i < lives; i++) {
+    ctx.fillStyle = C.red;
+    ctx.fillRect(76 + i * 12, 54, 8, 8);
+    ctx.fillStyle = '#ff8888';
+    ctx.fillRect(77 + i * 12, 55, 3, 3);
+  }
+
+  // Combo indicator
+  if (comboCount >= 3) {
+    ctx.fillStyle = C.hudBg;
+    ctx.fillRect(10, 78, 120, 24);
+    const comboColor = comboCount >= 5 ? C.titleGold : '#ff8844';
+    ctx.fillStyle = comboColor;
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'left';
+    const mult = comboCount >= 5 ? 'x3' : 'x2';
+    ctx.fillText('COMBO ' + mult + '!', 18, 95);
+  }
+
+  // Net cooldown indicator
+  if (netCooldownTimer > 0 || netSwing) {
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(BASE_W / 2 - 30, BASE_H - 30, 60, 8);
+    const cd = netSwing ? 1 : netCooldownTimer / NET_COOLDOWN;
+    ctx.fillStyle = '#88aaff';
+    ctx.fillRect(BASE_W / 2 - 30, BASE_H - 30, 60 * (1 - cd), 8);
+  }
+}
+
+function drawNetReachIndicator() {
+  if (!princess || state !== 'play') return;
+  ctx.globalAlpha = 0.12;
+  ctx.strokeStyle = C.white;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.arc(princess.x, princess.y, NET_RADIUS, 0, Math.PI * 2);
+  ctx.stroke();
+  // Also show danger zone
+  ctx.strokeStyle = C.red;
+  ctx.globalAlpha = 0.15;
+  ctx.beginPath();
+  ctx.arc(princess.x, princess.y, DANGER_RADIUS, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+}
+
+// -- Screen Drawing Functions --
+function drawTitleScreen() {
+  // Background
+  const grad = ctx.createLinearGradient(0, 0, 0, BASE_H);
+  grad.addColorStop(0, '#1a1a3a');
+  grad.addColorStop(0.5, '#2a2050');
+  grad.addColorStop(1, '#1a1a3a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+  // Stars with enhanced twinkling
+  for (const star of starField) {
+    const twinkle = Math.sin(titleAnimTime * 3 + star.twinkle);
+    const alpha = 0.3 + 0.6 * Math.abs(twinkle);
+    const size = star.size * (0.7 + 0.5 * Math.abs(twinkle));
+    // Occasional bright flash
+    const flash = Math.sin(titleAnimTime * 7 + star.twinkle * 2) > 0.95 ? 0.4 : 0;
+    ctx.fillStyle = `rgba(255,255,255,${Math.min(1, alpha + flash)})`;
+    ctx.fillRect(Math.floor(star.x), Math.floor(star.y), size, size);
+    // Add cross sparkle on bright stars
+    if (flash > 0) {
+      ctx.fillRect(Math.floor(star.x) - 1, Math.floor(star.y) + size/2, size + 2, 1);
+      ctx.fillRect(Math.floor(star.x) + size/2, Math.floor(star.y) - 1, 1, size + 2);
+    }
+  }
+
+  // Castle silhouette
+  ctx.fillStyle = '#0a0a1a';
+  // Main structure
+  ctx.fillRect(200, 250, 400, 200);
+  // Towers
+  ctx.fillRect(180, 180, 60, 270);
+  ctx.fillRect(560, 180, 60, 270);
+  // Tower tops
+  ctx.fillRect(170, 160, 80, 25);
+  ctx.fillRect(550, 160, 80, 25);
+  // Battlements
+  for (let x = 200; x < 600; x += 30) {
+    ctx.fillRect(x, 230, 20, 25);
+  }
+  // Battlements on towers
+  for (let i = 0; i < 3; i++) {
+    ctx.fillRect(175 + i * 22, 145, 16, 18);
+    ctx.fillRect(555 + i * 22, 145, 16, 18);
+  }
+  // Windows
+  ctx.fillStyle = '#334466';
+  ctx.fillRect(210, 280, 20, 30);
+  ctx.fillRect(280, 280, 20, 30);
+  ctx.fillRect(500, 280, 20, 30);
+  ctx.fillRect(570, 280, 20, 30);
+  // Main door
+  ctx.fillStyle = '#1a1a2a';
+  ctx.fillRect(370, 320, 60, 130);
+  ctx.beginPath();
+  ctx.arc(400, 320, 30, Math.PI, 0);
+  ctx.fill();
+
+  // Title text
+  const titleY = 80 + Math.sin(titleAnimTime * 1.5) * 5;
+  ctx.save();
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.font = 'bold 52px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('PRINCESS HERO', BASE_W / 2 + 3, titleY + 3);
+  // Main text
+  ctx.fillStyle = C.titlePink;
+  ctx.fillText('PRINCESS HERO', BASE_W / 2, titleY);
+  // Subtitle
+  ctx.fillStyle = C.titleGold;
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText('~ Castle Defender ~', BASE_W / 2, titleY + 35);
+  ctx.restore();
+
+  // Start button
+  const bx = BASE_W / 2 - 80;
+  const by = 340;
+  const bw = 160;
+  const bh = 50;
+  ctx.fillStyle = hoverStart ? C.btnHover : C.btnBg;
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.fillStyle = C.btnHover;
+  ctx.fillRect(bx, by, bw, 3);
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(bx, by + bh - 3, bw, 3);
+  // Border
+  ctx.strokeStyle = C.titleGold;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx, by, bw, bh);
+  // Text
+  ctx.fillStyle = C.btnText;
+  ctx.font = 'bold 22px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('START', BASE_W / 2, by + 33);
+
+  // Instructions hint
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = '13px monospace';
+  ctx.fillText('Click / Tap to play', BASE_W / 2, 420);
+  ctx.fillText('Arrow Keys or W/S to move', BASE_W / 2, 440);
+
+  // High score
+  if (highScore > 0) {
+    ctx.fillStyle = C.titleGold;
+    ctx.font = '14px monospace';
+    ctx.fillText('High Score: ' + highScore, BASE_W / 2, 470);
+  }
+}
+
+function drawSelectScreen() {
+  const grad = ctx.createLinearGradient(0, 0, 0, BASE_H);
+  grad.addColorStop(0, '#1a1a3a');
+  grad.addColorStop(0.5, '#2a2050');
+  grad.addColorStop(1, '#1a1a3a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+  // Title
+  ctx.fillStyle = C.titlePink;
+  ctx.font = 'bold 32px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('Choose Your Princess', BASE_W / 2, 60);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = '14px monospace';
+  ctx.fillText('Click to select', BASE_W / 2, 90);
+
+  // Princess cards
+  for (let i = 0; i < 4; i++) {
+    const px = 120 + i * 160;
+    const py = 180;
+    const p = PRINCESS_DATA[i];
+    const isHover = hoverPrincess === i;
+
+    // Card background
+    ctx.fillStyle = isHover ? 'rgba(100,80,160,0.6)' : 'rgba(40,30,60,0.6)';
+    ctx.fillRect(px - 50, py - 20, 100, 140);
+    ctx.strokeStyle = isHover ? C.titleGold : 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = isHover ? 2 : 1;
+    ctx.strokeRect(px - 50, py - 20, 100, 140);
+
+    // Draw mini princess sprite
+    ctx.save();
+    ctx.translate(px, py + 30);
+    ctx.scale(2, 2);
+
+    // Dress
+    ctx.fillStyle = p.dress;
+    ctx.fillRect(-8, -4, 16, 20);
+    ctx.fillRect(-10, 8, 20, 8);
+    ctx.fillStyle = p.dressDark;
+    ctx.fillRect(-10, 14, 20, 2);
+
+    // Dress sparkles for all princesses
+    const sparkleColors = [
+      {main: '#ffddee', cross: '#ffaacc'}, // Rose - pink sparkles
+      {main: '#ffffff', cross: '#aaccff'}, // Azure - blue-white sparkles
+      {main: '#ddffdd', cross: '#88dd88'}, // Jade - green sparkles
+      {main: '#eeddff', cross: '#cc99ff'}  // Violet - purple sparkles
+    ];
+    const sparkles = [{x:-4,y:0},{x:3,y:6},{x:-6,y:10},{x:5,y:2},{x:-2,y:12}];
+    for (let si = 0; si < sparkles.length; si++) {
+      const a = Math.sin(titleAnimTime * 3 + si * 1.5 + i * 0.5) * 0.5 + 0.5;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = sparkleColors[i].main;
+      ctx.fillRect(sparkles[si].x, sparkles[si].y, 1, 1);
+      ctx.fillStyle = sparkleColors[i].cross;
+      ctx.fillRect(sparkles[si].x - 1, sparkles[si].y, 3, 1);
+      ctx.fillRect(sparkles[si].x, sparkles[si].y - 1, 1, 3);
+    }
+    ctx.globalAlpha = 1;
+
+    // Skin
+    ctx.fillStyle = p.skin;
+    ctx.fillRect(-5, -14, 10, 12);
+
+    // Violet: heart-shaped neckline (front view - symmetrical)
+    if (i === 3) {
+      ctx.fillStyle = p.skin;
+      ctx.fillRect(-2, -2, 4, 2);     // neck, y:-2 to 0
+      // Heart bumps (two mounds of visible skin)
+      ctx.fillRect(-4, 0, 3, 2);      // left bump
+      ctx.fillRect(1, 0, 3, 2);       // right bump
+      // Narrowing V below
+      ctx.fillRect(-3, 2, 6, 1);
+      ctx.fillRect(-2, 3, 4, 1);
+      ctx.fillRect(-1, 4, 2, 1);      // point
+      // Neckline dress edge
+      ctx.fillStyle = p.dressDark;
+      ctx.fillRect(-4, 2, 1, 1);
+      ctx.fillRect(3, 2, 1, 1);
+      ctx.fillRect(-2, 4, 1, 1);
+      ctx.fillRect(1, 4, 1, 1);
+    }
+
+    // Hair
+    ctx.fillStyle = p.hair;
+    ctx.fillRect(-6, -18, 12, 8);
+    ctx.fillRect(-7, -16, 2, 12);
+    ctx.fillRect(5, -16, 2, 12);
+
+    // Azure braid (drapes over right shoulder in front view)
+    if (i === 1) {
+      ctx.fillStyle = p.hair;
+      ctx.fillRect(6, -4, 2, 3);
+      ctx.fillStyle = p.hairDark;
+      ctx.fillRect(7, -1, 2, 3);
+      ctx.fillStyle = p.hair;
+      ctx.fillRect(6, 2, 2, 3);
+      ctx.fillStyle = p.hairDark;
+      ctx.fillRect(7, 5, 2, 3);
+      ctx.fillStyle = p.hair;
+      ctx.fillRect(6, 8, 2, 2);
+      // Braid tie
+      ctx.fillStyle = '#4a90d9';
+      ctx.fillRect(5, 10, 3, 2);
+    }
+
+    // Violet: soft wavy hair falling into dress area (front view)
+    if (i === 3) {
+      ctx.fillStyle = p.hair;
+      // Left side - long wavy fall
+      ctx.fillRect(-7, -4, 2, 12);    // main fall, y:-4 to 8
+      ctx.fillRect(-8, -6, 1, 5);     // wave out
+      ctx.fillRect(-8, 2, 1, 5);      // wave out lower
+      ctx.fillRect(-9, -4, 1, 3);     // outer crest
+      ctx.fillRect(-9, 4, 1, 2);      // outer crest lower
+      // Right side - matching wavy fall
+      ctx.fillRect(5, -4, 2, 12);     // main fall
+      ctx.fillRect(7, -6, 1, 5);      // wave out
+      ctx.fillRect(7, 2, 1, 5);       // wave out lower
+      ctx.fillRect(8, -4, 1, 3);      // outer crest
+      ctx.fillRect(8, 4, 1, 2);       // outer crest lower
+      // Dark accents for wave depth
+      ctx.fillStyle = p.hairDark;
+      ctx.fillRect(-7, -6, 1, 2);
+      ctx.fillRect(-8, -1, 1, 2);
+      ctx.fillRect(-7, 4, 1, 2);
+      ctx.fillRect(-8, 7, 1, 1);
+      ctx.fillRect(6, -6, 1, 2);
+      ctx.fillRect(7, -1, 1, 2);
+      ctx.fillRect(6, 4, 1, 2);
+      ctx.fillRect(7, 7, 1, 1);
+    }
+
+    // Crown
+    ctx.fillStyle = p.crown;
+    ctx.fillRect(-5, -20, 10, 3);
+    ctx.fillRect(-5, -22, 2, 4);
+    ctx.fillRect(-1, -23, 2, 5);
+    ctx.fillRect(3, -22, 2, 4);
+
+    // Eyes (all princesses have eyes in visible face area)
+    const selEyeY = -9;
+    ctx.fillStyle = p.eye;
+    ctx.fillRect(-3, selEyeY, 2, 2);
+    ctx.fillRect(1, selEyeY, 2, 2);
+    ctx.fillStyle = C.white;
+    ctx.fillRect(-2, selEyeY, 1, 1);
+    ctx.fillRect(2, selEyeY, 1, 1);
+
+    ctx.restore();
+
+    // Name
+    ctx.fillStyle = isHover ? C.titleGold : C.white;
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(p.name, px, py + 105);
+  }
+
+  // Bottom hint
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('All princesses have the same abilities - choose your favorite!', BASE_W / 2, BASE_H - 40);
+}
+
+function drawWaveAnnounce() {
+  // Draw gameplay in background
+  drawGameplay();
+
+  // Overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+  // Wave text
+  const scale2 = 1 + (1 - waveAnnounceTimer / 1.5) * 0.3;
+  const alpha = Math.min(1, waveAnnounceTimer * 2);
+  ctx.globalAlpha = alpha;
+  ctx.save();
+  ctx.translate(BASE_W / 2, BASE_H / 2);
+  ctx.scale(scale2, scale2);
+  ctx.fillStyle = C.titleGold;
+  ctx.font = 'bold 48px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('WAVE ' + wave, 0, 0);
+  ctx.fillStyle = C.white;
+  ctx.font = '18px monospace';
+  ctx.fillText(getWaveDescription(), 0, 35);
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function getWaveDescription() {
+  const phase = ((wave - 1) % 4) + 1;
+  if (phase === 1) return 'Dawn breaks... Goblins attack!';
+  if (phase === 2) return 'High noon... Bandits strike!';
+  if (phase === 3) return 'Sunset falls... Knights march!';
+  return 'Darkness descends... Wizards appear!';
+}
+
+function drawGameplay() {
+  drawBackground();
+  drawNetReachIndicator();
+  for (const e of enemies) {
+    drawEnemy(e);
+  }
+  drawPrincess();
+  drawNet();
+  drawParticles();
+  drawScorePopups();
+  drawHUD();
+}
+
+function drawGameOverScreen() {
+  // Draw gameplay frozen
+  drawBackground();
+  for (const e of enemies) {
+    drawEnemy(e);
+  }
+  drawPrincess();
+  drawParticles();
+
+  // Overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+  // Game Over text
+  ctx.fillStyle = C.red;
+  ctx.font = 'bold 52px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('GAME OVER', BASE_W / 2, 140);
+
+  // Reason
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.font = '18px monospace';
+  if (gameOverReason === 'breached') {
+    ctx.fillText('The castle has fallen!', BASE_W / 2, 175);
+  } else {
+    ctx.fillText('The princess was overwhelmed!', BASE_W / 2, 175);
+  }
+
+  // Score
+  ctx.fillStyle = C.white;
+  ctx.font = 'bold 24px monospace';
+  ctx.fillText('Score: ' + score, BASE_W / 2, 220);
+
+  // Wave reached
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '18px monospace';
+  ctx.fillText('Wave Reached: ' + wave, BASE_W / 2, 260);
+
+  // High score
+  if (score >= highScore && score > 0) {
+    ctx.fillStyle = C.titleGold;
+    ctx.font = 'bold 20px monospace';
+    const pulse = 1 + Math.sin(titleAnimTime * 4) * 0.1;
+    ctx.save();
+    ctx.translate(BASE_W / 2, 300);
+    ctx.scale(pulse, pulse);
+    ctx.fillText('NEW HIGH SCORE!', 0, 0);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = C.titleGold;
+    ctx.font = '16px monospace';
+    ctx.fillText('High Score: ' + highScore, BASE_W / 2, 300);
+  }
+
+  // Play Again button
+  const bx = BASE_W / 2 - 90;
+  const by = 340;
+  const bw = 180;
+  const bh = 50;
+  ctx.fillStyle = hoverRestart ? C.btnHover : C.btnBg;
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.fillStyle = C.btnHover;
+  ctx.fillRect(bx, by, bw, 3);
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(bx, by + bh - 3, bw, 3);
+  ctx.strokeStyle = C.titleGold;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx, by, bw, bh);
+  ctx.fillStyle = C.btnText;
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText('PLAY AGAIN', BASE_W / 2, by + 33);
+}
+
+// -- Main Game Loop --
+function gameLoop(timestamp) {
+  if (!lastTime) lastTime = timestamp;
+  dt = Math.min((timestamp - lastTime) / 1000, 0.05); // cap dt
+  lastTime = timestamp;
+
+  // Screen shake
+  ctx.save();
+  if (screenShake > 0) {
+    screenShake -= dt;
+    const shakeX = (Math.random() - 0.5) * screenShake * 20;
+    const shakeY = (Math.random() - 0.5) * screenShake * 20;
+    ctx.translate(shakeX, shakeY);
+  }
+
+  // Clear
+  ctx.fillStyle = C.black;
+  ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+  switch (state) {
+    case 'title':
+      drawTitleScreen();
+      break;
+    case 'select':
+      drawSelectScreen();
+      break;
+    case 'play':
+      updatePrincess(dt);
+      updateNet(dt);
+      updateEnemies(dt);
+      updateSpawning(dt);
+      updateParticles(dt);
+      updateScorePopups(dt);
+      updateCombo(dt);
+      if (netCooldownTimer > 0) netCooldownTimer -= dt * 1000;
+      drawGameplay();
+      break;
+    case 'waveAnnounce':
+      updatePrincess(dt);
+      updateParticles(dt);
+      updateScorePopups(dt);
+      waveAnnounceTimer -= dt;
+      if (waveAnnounceTimer <= 0) {
+        state = 'play';
+      }
+      drawWaveAnnounce();
+      break;
+    case 'gameover':
+      updateParticles(dt);
+      drawGameOverScreen();
+      break;
+  }
+
+  ctx.restore();
+  requestAnimationFrame(gameLoop);
+}
+
+// -- Init --
+initStarField();
+initCastleDecorations();
+requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>
