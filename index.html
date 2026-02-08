@@ -105,7 +105,7 @@ const ENEMY_TYPES = {
   goblin:  { name: 'Goblin',  color: '#44cc44', colorDark: '#228822', eyeColor: '#ff4444', speed: 1.0, hp: 1, points: 10, w: 20, h: 24 },
   bandit:  { name: 'Bandit',  color: '#cc8844', colorDark: '#aa6622', eyeColor: '#ffffff', speed: 1.4, hp: 1, points: 20, w: 22, h: 26 },
   knight:  { name: 'Dark Knight', color: '#666688', colorDark: '#444466', eyeColor: '#ff6666', speed: 0.7, hp: 2, points: 30, w: 26, h: 32 },
-  wizard:  { name: 'Wizard',  color: '#aa44cc', colorDark: '#882299', eyeColor: '#ffff44', speed: 1.6, hp: 1, points: 50, w: 20, h: 30 },
+  wizard:  { name: 'Wizard',  color: '#aa44cc', colorDark: '#882299', eyeColor: '#ffff44', speed: 0.8, hp: 10, points: 200, w: 20, h: 30 },
 };
 
 // -- Wave Config (one enemy type per wave, cycles after wave 4) --
@@ -113,20 +113,19 @@ const WAVE_DEFS = [
   { types: ['goblin'], spawnInterval: 2200, count: 5 },   // Wave 1: Dawn - Goblins
   { types: ['bandit'], spawnInterval: 2000, count: 5 },   // Wave 2: Midday - Bandits
   { types: ['knight'], spawnInterval: 2400, count: 4 },   // Wave 3: Sunset - Knights
-  { types: ['wizard'], spawnInterval: 2200, count: 4 },   // Wave 4: Night - Wizards
+  { types: ['wizard'], spawnInterval: 1, count: 1 },      // Wave 4: Night - BOSS Wizard (1 enemy, 10 HP)
   // Waves 5+ cycle back with increased difficulty
   { types: ['goblin'], spawnInterval: 1800, count: 7 },   // Wave 5: Dawn again
   { types: ['bandit'], spawnInterval: 1600, count: 7 },   // Wave 6: Midday
   { types: ['knight'], spawnInterval: 2000, count: 5 },   // Wave 7: Sunset
-  { types: ['wizard'], spawnInterval: 1800, count: 5 },   // Wave 8: Night
+  { types: ['wizard'], spawnInterval: 1, count: 1 },      // Wave 8: Night - BOSS Wizard
 ];
 
 // -- Game State --
-let state = 'title'; // title, select, play, gameover, waveAnnounce
+let state = 'title'; // title, select, play, gameover, waveAnnounce, victory, enterInitials
 let selectedPrincess = 0;
 let hoverPrincess = -1;
 let score = 0;
-let highScore = parseInt(localStorage.getItem('princessHeroHighScore')) || 0;
 let wave = 0;
 let waveEnemiesSpawned = 0;
 let waveEnemiesTotal = 0;
@@ -153,6 +152,52 @@ let titleAnimTime = 0;
 let starField = [];
 let castleDecorations = [];
 let gameOverReason = '';
+let victoryTimer = 0;
+let victoryFireworks = [];
+let enemiesDefeated = 0;
+
+// -- Leaderboard --
+const MAX_LEADERBOARD = 5;
+let leaderboard = [];
+let enteringInitials = '';
+let initialsNextState = 'title'; // where to go after entering initials
+let selectedLetter = 0; // 0-2 for which letter position
+
+function loadLeaderboard() {
+  try {
+    const data = localStorage.getItem('princessHeroLeaderboard');
+    if (data) {
+      leaderboard = JSON.parse(data);
+    }
+  } catch (e) {
+    leaderboard = [];
+  }
+}
+
+function saveLeaderboard() {
+  localStorage.setItem('princessHeroLeaderboard', JSON.stringify(leaderboard));
+}
+
+function getHighScore() {
+  return leaderboard.length > 0 ? leaderboard[0].score : 0;
+}
+
+function isHighScore(newScore) {
+  if (newScore <= 0) return false;
+  if (leaderboard.length < MAX_LEADERBOARD) return true;
+  return newScore > leaderboard[leaderboard.length - 1].score;
+}
+
+function addToLeaderboard(initials, newScore) {
+  leaderboard.push({ initials: initials.toUpperCase(), score: newScore });
+  leaderboard.sort((a, b) => b.score - a.score);
+  if (leaderboard.length > MAX_LEADERBOARD) {
+    leaderboard = leaderboard.slice(0, MAX_LEADERBOARD);
+  }
+  saveLeaderboard();
+}
+
+loadLeaderboard();
 
 // -- Audio System (Web Audio API) --
 let audioCtx = null;
@@ -204,6 +249,21 @@ function sfxSelect() {
 function sfxDoorHit() {
   playSound(100, 0.3, 'sawtooth', 0.12);
   playSound(80, 0.4, 'square', 0.08);
+}
+function sfxTeleport() {
+  playSound(800, 0.15, 'sine', 0.08);
+  playSound(1200, 0.1, 'sine', 0.06);
+  setTimeout(() => playSound(600, 0.2, 'sine', 0.05), 100);
+}
+function sfxVictory() {
+  playSound(523, 0.2, 'sine', 0.12); // C
+  setTimeout(() => playSound(659, 0.2, 'sine', 0.12), 150); // E
+  setTimeout(() => playSound(784, 0.2, 'sine', 0.12), 300); // G
+  setTimeout(() => playSound(1047, 0.4, 'sine', 0.15), 450); // High C
+  setTimeout(() => {
+    playSound(784, 0.15, 'sine', 0.1);
+    playSound(1047, 0.3, 'sine', 0.12);
+  }, 650);
 }
 
 // -- Scaling --
@@ -274,6 +334,36 @@ document.addEventListener('keydown', (e) => {
   keysDown[e.key.toLowerCase()] = true;
   if (e.key === ' ' && state === 'play') {
     e.preventDefault();
+    // Spacebar swings net toward mouse position
+    if (netCooldownTimer <= 0 && !netSwing) {
+      swingNet(mouseX, mouseY);
+    }
+  }
+  // Handle initials entry
+  if (state === 'enterInitials') {
+    e.preventDefault();
+    const key = e.key.toUpperCase();
+    if (key === 'BACKSPACE' && enteringInitials.length > 0) {
+      enteringInitials = enteringInitials.slice(0, -1);
+      sfxSelect();
+    } else if (key === 'ENTER' && enteringInitials.length === 3) {
+      addToLeaderboard(enteringInitials, score);
+      sfxCatch();
+      state = initialsNextState;
+    } else if (/^[A-Z]$/.test(key) && enteringInitials.length < 3) {
+      enteringInitials += key;
+      sfxSelect();
+      if (enteringInitials.length === 3) {
+        // Auto-submit after 3 letters
+        setTimeout(() => {
+          if (state === 'enterInitials' && enteringInitials.length === 3) {
+            addToLeaderboard(enteringInitials, score);
+            sfxCatch();
+            state = initialsNextState;
+          }
+        }, 500);
+      }
+    }
   }
 });
 document.addEventListener('keyup', (e) => {
@@ -286,6 +376,9 @@ function updateHoverStates() {
     hoverStart = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
   } else if (state === 'gameover') {
     const bx = BASE_W / 2 - 90, by = 340, bw = 180, bh = 50;
+    hoverRestart = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
+  } else if (state === 'victory') {
+    const bx = BASE_W / 2 - 90, by = 460, bw = 180, bh = 35;
     hoverRestart = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
   } else if (state === 'select') {
     hoverPrincess = -1;
@@ -333,6 +426,15 @@ function handleClick(x, y) {
 
   if (state === 'gameover') {
     const bx = BASE_W / 2 - 90, by = 340, bw = 180, bh = 50;
+    if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) {
+      sfxSelect();
+      state = 'select';
+    }
+    return;
+  }
+
+  if (state === 'victory') {
+    const bx = BASE_W / 2 - 90, by = 460, bw = 180, bh = 35;
     if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) {
       sfxSelect();
       state = 'select';
@@ -389,7 +491,7 @@ function createEnemy(type) {
   const def = ENEMY_TYPES[type];
   const yMin = 200;
   const yMax = BASE_H - 60;
-  return {
+  const enemy = {
     type: type,
     x: ENEMY_SPAWN_X,
     y: yMin + Math.random() * (yMax - yMin),
@@ -406,6 +508,14 @@ function createEnemy(type) {
     zigzagTimer: Math.random() * Math.PI * 2,
     alive: true,
   };
+  // Wizard teleportation properties
+  if (type === 'wizard') {
+    enemy.teleportTimer = 2.0 + Math.random() * 2.0; // Time until next teleport
+    enemy.isVisible = true;
+    enemy.teleportPhase = 0; // 0 = visible, 1 = fading out, 2 = invisible, 3 = fading in
+    enemy.teleportFade = 1.0;
+  }
+  return enemy;
 }
 
 // -- Particles --
@@ -473,6 +583,8 @@ function startGame() {
   netSwing = null;
   netCooldownTimer = 0;
   screenShake = 0;
+  enemiesDefeated = 0;
+  victoryFireworks = [];
   startWave();
 }
 
@@ -550,6 +662,8 @@ function updateNet(dt) {
   for (let i = enemies.length - 1; i >= 0; i--) {
     const e = enemies[i];
     if (!e.alive || netSwing.hitEnemies.has(e)) continue;
+    // Can't hit invisible wizards
+    if (e.type === 'wizard' && !e.isVisible) continue;
 
     const ex = e.x;
     const ey = e.y;
@@ -580,6 +694,7 @@ function hitEnemy(e) {
 
   if (e.hp <= 0) {
     e.alive = false;
+    enemiesDefeated++;
     let points = e.points;
 
     // Combo system
@@ -600,8 +715,33 @@ function hitEnemy(e) {
     const def = ENEMY_TYPES[e.type];
     spawnParticles(e.x, e.y, def.color, 8);
     spawnParticles(e.x, e.y, C.titleGold, 4);
+
+    // Check for victory - wizard boss defeated on wave 4!
+    if (e.type === 'wizard' && wave === 4) {
+      // Big explosion of particles for boss defeat
+      for (let i = 0; i < 5; i++) {
+        setTimeout(() => {
+          spawnParticles(e.x + (Math.random() - 0.5) * 50, e.y + (Math.random() - 0.5) * 50, '#ff44ff', 10);
+          spawnParticles(e.x + (Math.random() - 0.5) * 50, e.y + (Math.random() - 0.5) * 50, C.titleGold, 8);
+        }, i * 100);
+      }
+      setTimeout(() => triggerVictory(), 500);
+    }
   } else {
     spawnParticles(e.x, e.y, '#ffffff', 3);
+  }
+}
+
+function triggerVictory() {
+  victoryTimer = 0;
+  victoryFireworks = [];
+  sfxVictory();
+  if (isHighScore(score)) {
+    enteringInitials = '';
+    initialsNextState = 'victory';
+    state = 'enterInitials';
+  } else {
+    state = 'victory';
   }
 }
 
@@ -615,12 +755,60 @@ function updateEnemies(dt) {
 
     // Movement
     const def = ENEMY_TYPES[e.type];
-    e.x -= e.speed * 60 * dt;
 
-    // Wizard zigzag
+    // Wizard teleportation logic
     if (e.type === 'wizard') {
-      e.zigzagTimer += dt * 3;
-      e.y += Math.sin(e.zigzagTimer) * 1.5;
+      if (e.teleportPhase === 0) {
+        // Visible, counting down to next teleport
+        e.teleportTimer -= dt;
+        if (e.teleportTimer <= 0) {
+          // Start fading out
+          e.teleportPhase = 1;
+          e.teleportFade = 1.0;
+          sfxTeleport();
+        }
+      } else if (e.teleportPhase === 1) {
+        // Fading out
+        e.teleportFade -= dt * 4;
+        if (e.teleportFade <= 0) {
+          e.teleportPhase = 2;
+          e.teleportFade = 0;
+          e.isVisible = false;
+          e.teleportTimer = 0; // Reset for phase 2 timing
+          // Teleport to new position
+          const yMin = 200;
+          const yMax = BASE_H - 60;
+          e.y = yMin + Math.random() * (yMax - yMin);
+          // Spawn particles at old location
+          spawnParticles(e.x, e.y, '#ff44ff', 8);
+        }
+      } else if (e.teleportPhase === 2) {
+        // Brief invisibility
+        e.teleportTimer += dt;
+        if (e.teleportTimer >= 0.3) {
+          e.teleportPhase = 3;
+          // Spawn particles at new location
+          spawnParticles(e.x, e.y, '#ff44ff', 8);
+        }
+      } else if (e.teleportPhase === 3) {
+        // Fading in
+        e.teleportFade += dt * 4;
+        if (e.teleportFade >= 1) {
+          e.teleportFade = 1.0;
+          e.teleportPhase = 0;
+          e.isVisible = true;
+          e.teleportTimer = 2.0 + Math.random() * 2.0; // Reset timer for next teleport
+        }
+      }
+
+      // Only move when visible
+      if (e.isVisible || e.teleportPhase === 3) {
+        e.x -= e.speed * 60 * dt;
+        e.zigzagTimer += dt * 3;
+        e.y += Math.sin(e.zigzagTimer) * 1.5;
+      }
+    } else {
+      e.x -= e.speed * 60 * dt;
     }
 
     // Clamp Y
@@ -637,7 +825,9 @@ function updateEnemies(dt) {
     if (e.hitFlash > 0) e.hitFlash -= dt;
 
     // Check if enemy is dangerously close to princess (and princess isn't swinging)
-    if (princess && !princess.swinging) {
+    // Invisible wizards can't hurt the princess
+    const canHurtPrincess = e.type !== 'wizard' || e.isVisible;
+    if (princess && !princess.swinging && canHurtPrincess) {
       const dx = e.x - princess.x;
       const dy = e.y - princess.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
@@ -729,12 +919,14 @@ function updateCombo(dt) {
 }
 
 function gameOver() {
-  state = 'gameover';
-  if (score > highScore) {
-    highScore = score;
-    localStorage.setItem('princessHeroHighScore', highScore.toString());
-  }
   sfxGameOver();
+  if (isHighScore(score)) {
+    enteringInitials = '';
+    initialsNextState = 'gameover';
+    state = 'enterInitials';
+  } else {
+    state = 'gameover';
+  }
 }
 
 function easeOutQuad(t) {
@@ -1248,8 +1440,14 @@ function drawEnemy(e) {
   const f = e.animFrame;
   const walkBob = f === 0 ? 0 : -1;
 
-  // Shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  // Don't draw fully invisible wizards (phase 2)
+  if (e.type === 'wizard' && e.teleportPhase === 2) {
+    return;
+  }
+
+  // Shadow (fainter for teleporting wizard)
+  const shadowAlpha = e.type === 'wizard' ? 0.2 * e.teleportFade : 0.2;
+  ctx.fillStyle = `rgba(0,0,0,${shadowAlpha})`;
   ctx.beginPath();
   ctx.ellipse(x, y + e.h / 2 + 2, e.w / 2, 3, 0, 0, Math.PI * 2);
   ctx.fill();
@@ -1257,8 +1455,13 @@ function drawEnemy(e) {
   ctx.save();
   ctx.translate(x, y + walkBob);
 
+  // Wizard teleport fade effect
+  if (e.type === 'wizard' && e.teleportFade < 1) {
+    ctx.globalAlpha = e.teleportFade;
+  }
+
   if (e.hitFlash > 0) {
-    ctx.globalAlpha = 0.5 + Math.sin(e.hitFlash * 40) * 0.5;
+    ctx.globalAlpha = (e.type === 'wizard' ? e.teleportFade : 1) * (0.5 + Math.sin(e.hitFlash * 40) * 0.5);
   }
 
   if (e.type === 'goblin') {
@@ -1275,8 +1478,14 @@ function drawEnemy(e) {
   if (e.maxHp > 1 && e.hp > 0) {
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(-e.w / 2, -e.h / 2 - 8, e.w, 4);
-    ctx.fillStyle = e.hp > 1 ? C.healthGreen : C.healthRed;
-    ctx.fillRect(-e.w / 2, -e.h / 2 - 8, e.w * (e.hp / e.maxHp), 4);
+    const hpRatio = e.hp / e.maxHp;
+    // Color gradient: green > yellow > orange > red
+    let hpColor;
+    if (hpRatio > 0.6) hpColor = C.healthGreen;
+    else if (hpRatio > 0.3) hpColor = C.healthYellow;
+    else hpColor = C.healthRed;
+    ctx.fillStyle = hpColor;
+    ctx.fillRect(-e.w / 2, -e.h / 2 - 8, e.w * hpRatio, 4);
   }
 
   ctx.restore();
@@ -1595,7 +1804,7 @@ function drawHUD() {
   ctx.fillStyle = C.hudText;
   ctx.font = '14px monospace';
   ctx.textAlign = 'right';
-  ctx.fillText('HI-SCORE: ' + highScore, BASE_W - 18, 30);
+  ctx.fillText('HI-SCORE: ' + getHighScore(), BASE_W - 18, 30);
 
   // Lives
   ctx.fillStyle = C.hudBg;
@@ -1751,14 +1960,22 @@ function drawTitleScreen() {
   // Instructions hint
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
   ctx.font = '13px monospace';
-  ctx.fillText('Click / Tap to play', BASE_W / 2, 420);
-  ctx.fillText('Arrow Keys or W/S to move', BASE_W / 2, 440);
+  ctx.fillText('WASD to move • Click or Space to swing', BASE_W / 2, 415);
 
-  // High score
-  if (highScore > 0) {
+  // Leaderboard
+  if (leaderboard.length > 0) {
     ctx.fillStyle = C.titleGold;
-    ctx.font = '14px monospace';
-    ctx.fillText('High Score: ' + highScore, BASE_W / 2, 470);
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText('~ TOP SCORES ~', BASE_W / 2, 445);
+
+    ctx.font = '12px monospace';
+    for (let i = 0; i < leaderboard.length; i++) {
+      const entry = leaderboard[i];
+      const rank = i + 1;
+      const y = 462 + i * 14;
+      ctx.fillStyle = i === 0 ? C.titleGold : 'rgba(255,255,255,0.7)';
+      ctx.fillText(`${rank}. ${entry.initials} - ${entry.score}`, BASE_W / 2, y);
+    }
   }
 }
 
@@ -1961,7 +2178,7 @@ function getWaveDescription() {
   if (phase === 1) return 'Dawn breaks... Goblins attack!';
   if (phase === 2) return 'High noon... Bandits strike!';
   if (phase === 3) return 'Sunset falls... Knights march!';
-  return 'Darkness descends... Wizards appear!';
+  return 'Darkness descends... BOSS WIZARD!';
 }
 
 function drawGameplay() {
@@ -1975,6 +2192,88 @@ function drawGameplay() {
   drawParticles();
   drawScorePopups();
   drawHUD();
+}
+
+function drawInitialsScreen() {
+  // Background
+  const grad = ctx.createLinearGradient(0, 0, 0, BASE_H);
+  grad.addColorStop(0, '#1a1a3a');
+  grad.addColorStop(0.5, '#2a2050');
+  grad.addColorStop(1, '#1a1a3a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+  // Stars
+  for (const star of starField) {
+    const twinkle = Math.sin(titleAnimTime * 3 + star.twinkle);
+    const alpha = 0.3 + 0.4 * Math.abs(twinkle);
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    ctx.fillRect(Math.floor(star.x), Math.floor(star.y), star.size, star.size);
+  }
+
+  // Title
+  ctx.fillStyle = C.titleGold;
+  ctx.font = 'bold 36px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('NEW HIGH SCORE!', BASE_W / 2, 100);
+
+  // Score
+  ctx.fillStyle = C.white;
+  ctx.font = 'bold 28px monospace';
+  ctx.fillText(score.toString(), BASE_W / 2, 150);
+
+  // Instructions
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '16px monospace';
+  ctx.fillText('Enter your initials:', BASE_W / 2, 200);
+
+  // Initials boxes
+  const boxWidth = 60;
+  const boxHeight = 70;
+  const boxSpacing = 20;
+  const startX = BASE_W / 2 - (boxWidth * 3 + boxSpacing * 2) / 2;
+
+  for (let i = 0; i < 3; i++) {
+    const bx = startX + i * (boxWidth + boxSpacing);
+    const by = 230;
+    const letter = enteringInitials[i] || '';
+    const isActive = i === enteringInitials.length && enteringInitials.length < 3;
+
+    // Box background
+    ctx.fillStyle = isActive ? 'rgba(100,80,160,0.8)' : 'rgba(40,30,60,0.8)';
+    ctx.fillRect(bx, by, boxWidth, boxHeight);
+
+    // Box border
+    ctx.strokeStyle = isActive ? C.titleGold : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = isActive ? 3 : 2;
+    ctx.strokeRect(bx, by, boxWidth, boxHeight);
+
+    // Letter
+    ctx.fillStyle = C.white;
+    ctx.font = 'bold 40px monospace';
+    ctx.fillText(letter, bx + boxWidth / 2, by + 52);
+
+    // Cursor blink for active box
+    if (isActive && Math.floor(titleAnimTime * 3) % 2 === 0) {
+      ctx.fillStyle = C.titleGold;
+      ctx.fillRect(bx + boxWidth / 2 - 10, by + boxHeight - 10, 20, 3);
+    }
+  }
+
+  // Hint
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = '14px monospace';
+  ctx.fillText('Type A-Z • Backspace to delete', BASE_W / 2, 340);
+
+  // Show confirmation when done
+  if (enteringInitials.length === 3) {
+    ctx.fillStyle = C.titleGold;
+    ctx.font = 'bold 18px monospace';
+    const pulse = 0.7 + Math.sin(titleAnimTime * 6) * 0.3;
+    ctx.globalAlpha = pulse;
+    ctx.fillText('Press ENTER to confirm', BASE_W / 2, 380);
+    ctx.globalAlpha = 1;
+  }
 }
 
 function drawGameOverScreen() {
@@ -2016,7 +2315,7 @@ function drawGameOverScreen() {
   ctx.fillText('Wave Reached: ' + wave, BASE_W / 2, 260);
 
   // High score
-  if (score >= highScore && score > 0) {
+  if (score >= getHighScore() && score > 0) {
     ctx.fillStyle = C.titleGold;
     ctx.font = 'bold 20px monospace';
     const pulse = 1 + Math.sin(titleAnimTime * 4) * 0.1;
@@ -2028,7 +2327,7 @@ function drawGameOverScreen() {
   } else {
     ctx.fillStyle = C.titleGold;
     ctx.font = '16px monospace';
-    ctx.fillText('High Score: ' + highScore, BASE_W / 2, 300);
+    ctx.fillText('High Score: ' + getHighScore(), BASE_W / 2, 300);
   }
 
   // Play Again button
@@ -2048,6 +2347,221 @@ function drawGameOverScreen() {
   ctx.fillStyle = C.btnText;
   ctx.font = 'bold 20px monospace';
   ctx.fillText('PLAY AGAIN', BASE_W / 2, by + 33);
+}
+
+function drawVictoryScreen() {
+  victoryTimer += dt;
+  const p = PRINCESS_DATA[selectedPrincess];
+
+  // Animated gradient background (celebratory)
+  const grad = ctx.createLinearGradient(0, 0, 0, BASE_H);
+  const hue1 = (victoryTimer * 20) % 360;
+  const hue2 = (hue1 + 60) % 360;
+  grad.addColorStop(0, `hsl(${hue1}, 40%, 15%)`);
+  grad.addColorStop(0.5, `hsl(${hue2}, 50%, 25%)`);
+  grad.addColorStop(1, `hsl(${hue1}, 40%, 15%)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+  // Animated stars/sparkles in background
+  for (const star of starField) {
+    const twinkle = Math.sin(victoryTimer * 5 + star.twinkle);
+    const alpha = 0.5 + 0.5 * twinkle;
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    ctx.fillRect(Math.floor(star.x), Math.floor(star.y), star.size * 1.5, star.size * 1.5);
+  }
+
+  // Spawn fireworks periodically
+  if (Math.random() < 0.05) {
+    victoryFireworks.push({
+      x: 100 + Math.random() * (BASE_W - 200),
+      y: 50 + Math.random() * 150,
+      timer: 0,
+      color: ['#ff4488', '#44ff88', '#4488ff', '#ffff44', '#ff8844', '#aa44ff'][Math.floor(Math.random() * 6)],
+      particles: []
+    });
+  }
+
+  // Update and draw fireworks
+  for (let i = victoryFireworks.length - 1; i >= 0; i--) {
+    const fw = victoryFireworks[i];
+    fw.timer += dt;
+
+    if (fw.timer < 0.1 && fw.particles.length === 0) {
+      // Explode
+      for (let j = 0; j < 20; j++) {
+        const angle = (j / 20) * Math.PI * 2;
+        const speed = 80 + Math.random() * 60;
+        fw.particles.push({
+          x: fw.x, y: fw.y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 1
+        });
+      }
+    }
+
+    // Draw particles
+    for (let j = fw.particles.length - 1; j >= 0; j--) {
+      const part = fw.particles[j];
+      part.x += part.vx * dt;
+      part.y += part.vy * dt;
+      part.vy += 80 * dt; // gravity
+      part.life -= dt * 0.8;
+
+      if (part.life > 0) {
+        ctx.globalAlpha = part.life;
+        ctx.fillStyle = fw.color;
+        ctx.fillRect(part.x - 2, part.y - 2, 4, 4);
+        ctx.globalAlpha = 1;
+      } else {
+        fw.particles.splice(j, 1);
+      }
+    }
+
+    if (fw.timer > 2) {
+      victoryFireworks.splice(i, 1);
+    }
+  }
+
+  // Victory banner
+  const bannerY = 60 + Math.sin(victoryTimer * 2) * 5;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, bannerY - 10, BASE_W, 70);
+
+  ctx.fillStyle = C.titleGold;
+  ctx.font = 'bold 48px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('VICTORY!', BASE_W / 2, bannerY + 35);
+
+  // Subtitle
+  ctx.fillStyle = C.white;
+  ctx.font = '18px monospace';
+  ctx.fillText('The kingdom is saved!', BASE_W / 2, bannerY + 60);
+
+  // Draw princess in center (larger, animated)
+  ctx.save();
+  const princessX = BASE_W / 2;
+  const princessY = 220;
+  const bounce = Math.sin(victoryTimer * 3) * 3;
+  ctx.translate(princessX, princessY + bounce);
+  ctx.scale(3, 3); // 3x size
+
+  // Dress with sparkles
+  ctx.fillStyle = p.dress;
+  ctx.fillRect(-8, -4, 16, 20);
+  ctx.fillRect(-10, 8, 20, 8);
+  ctx.fillStyle = p.dressDark;
+  ctx.fillRect(-10, 14, 20, 2);
+
+  // Extra sparkles for victory
+  const sparkleColors = [
+    {main: '#ffddee', cross: '#ffaacc'},
+    {main: '#ffffff', cross: '#aaccff'},
+    {main: '#ddffdd', cross: '#88dd88'},
+    {main: '#eeddff', cross: '#cc99ff'}
+  ];
+  const sparkles = [{x:-4,y:0},{x:3,y:6},{x:-6,y:10},{x:5,y:2},{x:-2,y:12},{x:0,y:4},{x:-5,y:6},{x:4,y:10}];
+  for (let si = 0; si < sparkles.length; si++) {
+    const a = Math.sin(victoryTimer * 5 + si * 0.8) * 0.5 + 0.5;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = sparkleColors[selectedPrincess].main;
+    ctx.fillRect(sparkles[si].x, sparkles[si].y, 1, 1);
+    ctx.fillStyle = sparkleColors[selectedPrincess].cross;
+    ctx.fillRect(sparkles[si].x - 1, sparkles[si].y, 3, 1);
+    ctx.fillRect(sparkles[si].x, sparkles[si].y - 1, 1, 3);
+  }
+  ctx.globalAlpha = 1;
+
+  // Skin
+  ctx.fillStyle = p.skin;
+  ctx.fillRect(-5, -14, 10, 12);
+
+  // Hair
+  ctx.fillStyle = p.hair;
+  ctx.fillRect(-6, -18, 12, 8);
+  ctx.fillRect(-7, -16, 2, 12);
+  ctx.fillRect(5, -16, 2, 12);
+
+  // Crown (with extra sparkle)
+  ctx.fillStyle = p.crown;
+  ctx.fillRect(-5, -20, 10, 3);
+  ctx.fillRect(-5, -22, 2, 4);
+  ctx.fillRect(-1, -23, 2, 5);
+  ctx.fillRect(3, -22, 2, 4);
+  // Crown gems
+  const gemGlow = Math.sin(victoryTimer * 4) * 0.3 + 0.7;
+  ctx.globalAlpha = gemGlow;
+  ctx.fillStyle = '#ff4466';
+  ctx.fillRect(-4, -21, 1, 1);
+  ctx.fillStyle = '#44ff66';
+  ctx.fillRect(0, -22, 1, 1);
+  ctx.fillStyle = '#4466ff';
+  ctx.fillRect(4, -21, 1, 1);
+  ctx.globalAlpha = 1;
+
+  // Eyes (happy/closed for celebration)
+  ctx.fillStyle = p.eye;
+  ctx.fillRect(-3, -9, 3, 1); // Closed happy eyes
+  ctx.fillRect(1, -9, 3, 1);
+
+  // Smile
+  ctx.fillStyle = '#cc6666';
+  ctx.fillRect(-2, -6, 4, 1);
+  ctx.fillRect(-1, -5, 2, 1);
+
+  // Arms raised in celebration
+  ctx.fillStyle = p.skin;
+  ctx.fillRect(-10, -8, 4, 3);
+  ctx.fillRect(6, -8, 4, 3);
+  ctx.fillRect(-11, -12, 3, 5);
+  ctx.fillRect(8, -12, 3, 5);
+
+  ctx.restore();
+
+  // Princess name
+  ctx.fillStyle = C.titlePink;
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText(`Princess ${p.name}`, BASE_W / 2, 310);
+
+  // Stats summary
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(BASE_W / 2 - 150, 330, 300, 100);
+  ctx.strokeStyle = C.titleGold;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(BASE_W / 2 - 150, 330, 300, 100);
+
+  ctx.fillStyle = C.white;
+  ctx.font = '16px monospace';
+  ctx.fillText(`Final Score: ${score}`, BASE_W / 2, 358);
+  ctx.fillText(`Enemies Defeated: ${enemiesDefeated}`, BASE_W / 2, 382);
+  ctx.fillText(`Lives Remaining: ${lives}`, BASE_W / 2, 406);
+
+  // High score notification
+  if (score >= getHighScore() && score > 0) {
+    ctx.fillStyle = C.titleGold;
+    ctx.font = 'bold 18px monospace';
+    const pulse = 1 + Math.sin(victoryTimer * 4) * 0.1;
+    ctx.save();
+    ctx.translate(BASE_W / 2, 450);
+    ctx.scale(pulse, pulse);
+    ctx.fillText('NEW HIGH SCORE!', 0, 0);
+    ctx.restore();
+  }
+
+  // Play Again button
+  const bx = BASE_W / 2 - 90;
+  const by = 460;
+  const bw = 180;
+  const bh = 35;
+  ctx.fillStyle = hoverRestart ? C.btnHover : C.btnBg;
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = C.titleGold;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx, by, bw, bh);
+  ctx.fillStyle = C.btnText;
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('PLAY AGAIN', BASE_W / 2, by + 24);
 }
 
 // -- Main Game Loop --
@@ -2100,6 +2614,13 @@ function gameLoop(timestamp) {
     case 'gameover':
       updateParticles(dt);
       drawGameOverScreen();
+      break;
+    case 'victory':
+      drawVictoryScreen();
+      break;
+    case 'enterInitials':
+      titleAnimTime += dt;
+      drawInitialsScreen();
       break;
   }
 
