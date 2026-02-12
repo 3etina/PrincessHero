@@ -105,20 +105,15 @@ const ENEMY_TYPES = {
   goblin:  { name: 'Goblin',  color: '#44cc44', colorDark: '#228822', eyeColor: '#ff4444', speed: 1.0, hp: 1, points: 10, w: 20, h: 24 },
   bandit:  { name: 'Bandit',  color: '#cc8844', colorDark: '#aa6622', eyeColor: '#ffffff', speed: 1.4, hp: 1, points: 20, w: 22, h: 26 },
   knight:  { name: 'Dark Knight', color: '#666688', colorDark: '#444466', eyeColor: '#ff6666', speed: 0.7, hp: 2, points: 30, w: 26, h: 32 },
-  wizard:  { name: 'Wizard',  color: '#aa44cc', colorDark: '#882299', eyeColor: '#ffff44', speed: 0.8, hp: 10, points: 200, w: 20, h: 30 },
+  wizard:  { name: 'Wizard',  color: '#aa44cc', colorDark: '#882299', eyeColor: '#ffff44', speed: 0.8, hp: 5, points: 200, w: 20, h: 30 },
 };
 
-// -- Wave Config (one enemy type per wave, cycles after wave 4) --
+// -- Wave Config (4 waves, wizard is the final boss) --
 const WAVE_DEFS = [
   { types: ['goblin'], spawnInterval: 2200, count: 5 },   // Wave 1: Dawn - Goblins
   { types: ['bandit'], spawnInterval: 2000, count: 5 },   // Wave 2: Midday - Bandits
   { types: ['knight'], spawnInterval: 2400, count: 4 },   // Wave 3: Sunset - Knights
-  { types: ['wizard'], spawnInterval: 1, count: 1 },      // Wave 4: Night - BOSS Wizard (1 enemy, 10 HP)
-  // Waves 5+ cycle back with increased difficulty
-  { types: ['goblin'], spawnInterval: 1800, count: 7 },   // Wave 5: Dawn again
-  { types: ['bandit'], spawnInterval: 1600, count: 7 },   // Wave 6: Midday
-  { types: ['knight'], spawnInterval: 2000, count: 5 },   // Wave 7: Sunset
-  { types: ['wizard'], spawnInterval: 1, count: 1 },      // Wave 8: Night - BOSS Wizard
+  { types: ['wizard'], spawnInterval: 1, count: 1 },      // Wave 4: Night - BOSS Wizard (10 HP) - Final wave!
 ];
 
 // -- Game State --
@@ -716,8 +711,8 @@ function hitEnemy(e) {
     spawnParticles(e.x, e.y, def.color, 8);
     spawnParticles(e.x, e.y, C.titleGold, 4);
 
-    // Check for victory - wizard boss defeated on wave 4!
-    if (e.type === 'wizard' && wave === 4) {
+    // Check for victory - wizard boss defeated!
+    if (e.type === 'wizard') {
       // Big explosion of particles for boss defeat
       for (let i = 0; i < 5; i++) {
         setTimeout(() => {
@@ -775,12 +770,19 @@ function updateEnemies(dt) {
           e.teleportFade = 0;
           e.isVisible = false;
           e.teleportTimer = 0; // Reset for phase 2 timing
-          // Teleport to new position
+          // Teleport to new position - biased right but creeps left as HP drops
           const yMin = 200;
           const yMax = BASE_H - 60;
-          e.y = yMin + Math.random() * (yMax - yMin);
-          // Spawn particles at old location
+          const hpRatio = e.hp / e.maxHp; // 1.0 = full health, 0.0 = almost dead
+          const fieldLeft = DOOR_X + 80;  // don't teleport right on top of castle
+          const fieldRight = BASE_W - 40;
+          // At full HP, teleport to right 60% of field; as HP drops, allow further left
+          const minX = fieldLeft + (fieldRight - fieldLeft) * hpRatio * 0.4;
+          const maxX = fieldRight;
+          // Spawn particles at old location before moving
           spawnParticles(e.x, e.y, '#ff44ff', 8);
+          e.x = minX + Math.random() * (maxX - minX);
+          e.y = yMin + Math.random() * (yMax - yMin);
         }
       } else if (e.teleportPhase === 2) {
         // Brief invisibility
@@ -832,12 +834,20 @@ function updateEnemies(dt) {
       const dy = e.y - princess.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < DANGER_RADIUS) {
-        // Princess takes damage from enemy contact
-        enemies.splice(i, 1);
         lives--;
         screenShake = 0.3;
         sfxDoorHit();
         spawnParticles(princess.x, princess.y, C.red, 10);
+
+        if (e.type === 'wizard') {
+          // Wizard boss survives contact - teleports away instead of dying
+          e.teleportPhase = 1;
+          e.teleportFade = 1.0;
+          sfxTeleport();
+        } else {
+          // Normal enemies are destroyed on contact
+          enemies.splice(i, 1);
+        }
 
         if (lives <= 0) {
           gameOverReason = 'defeated';
@@ -879,8 +889,11 @@ function updateSpawning(dt) {
     enemies.push(createEnemy(type));
   }
 
-  // Check if wave is complete
+  // Check if wave is complete (don't auto-advance past wizard boss wave - victory handles it)
   if (waveEnemiesSpawned >= waveEnemiesTotal && enemies.length === 0) {
+    const waveIdx2 = Math.min(wave - 1, WAVE_DEFS.length - 1);
+    const waveDef = WAVE_DEFS[waveIdx2];
+    if (waveDef.types.includes('wizard')) return; // wizard wave ends via victory or game over
     startWave();
   }
 }
